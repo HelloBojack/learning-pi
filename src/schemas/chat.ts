@@ -13,7 +13,7 @@ export const ChatRequestSchema = z.object({
   model: z.string(),
   messages: z.array(ChatMessageSchema).min(1),
   temperature: z.number().min(0).max(2).optional(),
-  stream: z.literal(false).optional(),
+  stream: z.boolean().optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
@@ -37,3 +37,27 @@ export const ChatResponseSchema = z.object({
     .optional(),
 });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
+
+/** OpenAI SSE chunk: choices[].delta.content */
+export const StreamChunkSchema = z.object({
+  choices: z
+    .array(
+      z.object({
+        delta: z
+          .object({
+            content: z.string().optional(),
+          })
+          .optional(),
+        finish_reason: z.string().nullable().optional(),
+      }),
+    )
+    .optional(),
+  error: z
+    .object({
+      message: z.string(),
+      type: z.string().optional(),
+      code: z.string().optional(),
+    })
+    .optional(),
+});
+export type StreamChunk = z.infer<typeof StreamChunkSchema>;

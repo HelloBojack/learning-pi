@@ -5,6 +5,8 @@ import {
   ChatResponseSchema,
   type ChatMessage,
 } from "../schemas/chat";
+import { readOpenAiSseStream } from "./sse";
+import { writeChunkToStdout } from "./stdout";
 
 export class LlmApiError extends Error {
   readonly status: number;
@@ -25,14 +27,11 @@ export type ChatOptions = {
   timeoutMs?: number;
 };
 
-/**
- * 调用 OpenAI 兼容的 Chat Completions 接口（POST + JSON）。
- * 在 .env 中配置 API_URL、API_KEY；若 API_URL 仅为域名，可用 API_CHAT_PATH 指定路径。
- */
-export async function chat(
+async function postChat(
   messages: ChatMessage[],
-  options: ChatOptions = {},
-): Promise<string> {
+  options: ChatOptions,
+  stream: boolean,
+): Promise<Response> {
   const env = loadEnv();
   const endpoint = resolveChatEndpoint(env);
   const model = options.model ?? env.API_MODEL ?? "azure/gpt-5.4-mini";
@@ -41,34 +40,41 @@ export async function chat(
     model,
     messages: messages.map((m) => ChatMessageSchema.parse(m)),
     temperature: options.temperature,
-    stream: false,
+    stream,
   });
 
-  const timeoutMs = options.timeoutMs ?? 60_000;
   const signal =
-    options.signal ??
-    AbortSignal.timeout(timeoutMs);
+    options.signal ?? AbortSignal.timeout(options.timeoutMs ?? 60_000);
 
-  const response = await fetch(endpoint, {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${env.API_KEY}`,
+  };
+  if (stream) {
+    headers.Accept = "text/event-stream";
+  }
+
+  return fetch(endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${env.API_KEY}`,
-    },
+    headers,
     body: JSON.stringify(payload),
     signal,
   });
+}
 
+async function throwForFailedResponse(response: Response): Promise<never> {
   const raw = await response.text();
+  throw new LlmApiError(
+    `LLM request failed (${response.status})`,
+    response.status,
+    raw,
+  );
+}
 
-  if (!response.ok) {
-    throw new LlmApiError(
-      `LLM request failed (${response.status})`,
-      response.status,
-      raw,
-    );
-  }
-
+async function parseJsonChatResponse(
+  response: Response,
+  raw: string,
+): Promise<string> {
   let json: unknown;
   try {
     json = JSON.parse(raw);
@@ -96,4 +102,88 @@ export async function chat(
   }
 
   return content;
+}
+
+/**
+ * 流式调用大模型，逐段 yield 文本增量（OpenAI SSE）。
+ */
+export async function* chatStream(
+  messages: ChatMessage[],
+  options: ChatOptions = {},
+): AsyncGenerator<string, string> {
+  const response = await postChat(messages, options, true);
+
+  if (!response.ok) {
+    await throwForFailedResponse(response);
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+
+  // 部分网关在 stream:true 时仍返回整段 JSON
+  if (contentType.includes("application/json")) {
+    const raw = await response.text();
+    const content = await parseJsonChatResponse(response, raw);
+    for (const char of content) {
+      yield char;
+    }
+    return content;
+  }
+
+  if (!response.body) {
+    throw new LlmApiError("LLM returned no response body", response.status, "");
+  }
+
+  let full = "";
+  try {
+    for await (const chunk of readOpenAiSseStream(response.body)) {
+      full += chunk;
+      yield chunk;
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message) {
+      throw new LlmApiError(err.message, response.status, full);
+    }
+    throw err;
+  }
+
+  if (!full) {
+    throw new LlmApiError("LLM returned empty stream", response.status, "");
+  }
+
+  return full;
+}
+
+/**
+ * 非流式调用，等待完整回复后返回（内部走 stream 收集，失败时兼容 JSON 响应）。
+ */
+export async function chat(
+  messages: ChatMessage[],
+  options: ChatOptions = {},
+): Promise<string> {
+  const response = await postChat(messages, options, false);
+
+  if (!response.ok) {
+    await throwForFailedResponse(response);
+  }
+
+  const raw = await response.text();
+  return parseJsonChatResponse(response, raw);
+}
+
+/** 消费流式输出并写入 stdout，返回完整文本。 */
+export async function chatStreamToStdout(
+  messages: ChatMessage[],
+  options: ChatOptions = {},
+  opts: { prefix?: string } = {},
+): Promise<string> {
+  const prefix = opts.prefix ?? "";
+  if (prefix) process.stdout.write(prefix);
+
+  let full = "";
+  for await (const chunk of chatStream(messages, options)) {
+    await writeChunkToStdout(chunk);
+    full += chunk;
+  }
+
+  return full;
 }

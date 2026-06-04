@@ -1,6 +1,6 @@
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { chat, LlmApiError } from "./llm/chat";
+import { chatStreamToStdout, LlmApiError } from "./llm/chat";
 import type { ChatMessage } from "./schemas/chat";
 
 const EXIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
@@ -9,7 +9,7 @@ export async function runRepl(): Promise<void> {
   const rl = readline.createInterface({ input, output });
   const history: ChatMessage[] = [];
 
-  console.log("learning-pi 对话已启动");
+  console.log("learning-pi 对话已启动（流式输出）");
   console.log("输入消息后回车发送，/quit 或 Ctrl+C 退出\n");
 
   try {
@@ -21,9 +21,10 @@ export async function runRepl(): Promise<void> {
       history.push({ role: "user", content: line });
 
       try {
-        process.stdout.write("assistant> ");
-        const reply = await chat(history);
-        console.log(`${reply}\n`);
+        const reply = await chatStreamToStdout(history, {}, {
+          prefix: "assistant> ",
+        });
+        console.log("\n");
         history.push({ role: "assistant", content: reply });
       } catch (err) {
         history.pop();
@@ -44,6 +45,6 @@ export async function runRepl(): Promise<void> {
 }
 
 export async function runOnce(prompt: string): Promise<void> {
-  const reply = await chat([{ role: "user", content: prompt }]);
-  console.log(reply);
+  await chatStreamToStdout([{ role: "user", content: prompt }]);
+  console.log();
 }
