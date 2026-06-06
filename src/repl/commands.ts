@@ -4,6 +4,7 @@ import {
 	type PresetPromptId,
 } from "../prompts";
 import type { ChatMessage } from "../schemas/chat";
+import { printContextUsage } from "./context";
 import {
 	applyPresetSwitch,
 	clearConversation,
@@ -27,6 +28,7 @@ const META_COMMANDS: ReplCommand[] = [
 	{ id: "help", label: "显示帮助" },
 	{ id: "clear", label: "清空对话" },
 	{ id: "history", label: "查看对话历史" },
+	{ id: "tokens", label: "估算上下文 token" },
 	{
 		id: "presets",
 		label: "列出 preset",
@@ -76,6 +78,7 @@ function printHelp(): void {
   /help        显示此帮助
   /clear       清空对话（保留 system prompt）
   /history     查看当前对话历史
+  /tokens      估算当前上下文 token / 字符占用
   /presets     列出 preset（别名：/list、/prompts）
   /current     查看当前 preset
   /default     通用助手
@@ -138,6 +141,11 @@ export function tryHandleLocalCommand(
 
 	if (cmd === "history") {
 		printConversationHistory(history);
+		return "handled";
+	}
+
+	if (cmd === "tokens") {
+		printContextUsage(history);
 		return "handled";
 	}
 

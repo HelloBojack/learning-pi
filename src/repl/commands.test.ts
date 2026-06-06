@@ -14,6 +14,7 @@ describe("getReplCommands", () => {
 		const ids = getReplCommands().map((c) => c.id);
 		expect(ids).toContain("help");
 		expect(ids).toContain("clear");
+		expect(ids).toContain("tokens");
 		expect(ids).toContain("presets");
 		expect(ids).toContain("code");
 		expect(ids).not.toContain("list");
