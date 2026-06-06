@@ -18,6 +18,88 @@ export class LlmApiError extends Error {
     this.status = status;
     this.body = body;
   }
+
+  /** HTTP 4xx — 请求或鉴权问题，不应重试。 */
+  isClientError(): boolean {
+    return this.status >= 400 && this.status < 500;
+  }
+}
+
+/** fetch 抛错或超时（非 HTTP 4xx/5xx 响应体）。 */
+export class LlmNetworkError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "LlmNetworkError";
+  }
+}
+
+const FETCH_MAX_RETRIES = 2;
+const RETRY_BASE_DELAY_MS = 500;
+
+function isClientHttpStatus(status: number): boolean {
+  return status >= 400 && status < 500;
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status >= 500;
+}
+
+function retryDelayMs(attempt: number): number {
+  return RETRY_BASE_DELAY_MS * 2 ** attempt;
+}
+
+function toNetworkError(err: unknown): LlmNetworkError {
+  if (err instanceof LlmNetworkError) return err;
+  if (err instanceof DOMException && err.name === "AbortError") {
+    return new LlmNetworkError("请求超时或已取消", { cause: err });
+  }
+  if (err instanceof Error) {
+    return new LlmNetworkError(`网络请求失败: ${err.message}`, { cause: err });
+  }
+  return new LlmNetworkError("网络请求失败", { cause: err });
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchChatWithRetry(
+  endpoint: string,
+  init: Omit<RequestInit, "signal">,
+  options: ChatOptions,
+): Promise<Response> {
+  let lastResponse: Response | undefined;
+
+  for (let attempt = 0; attempt <= FETCH_MAX_RETRIES; attempt++) {
+    const signal =
+      options.signal ?? AbortSignal.timeout(options.timeoutMs ?? 60_000);
+
+    try {
+      const response = await fetch(endpoint, { ...init, signal });
+
+      if (response.ok || isClientHttpStatus(response.status)) {
+        return response;
+      }
+
+      lastResponse = response;
+      if (isRetryableHttpStatus(response.status) && attempt < FETCH_MAX_RETRIES) {
+        await sleep(retryDelayMs(attempt));
+        continue;
+      }
+      return response;
+    } catch (err) {
+      if (options.signal?.aborted) {
+        throw toNetworkError(err);
+      }
+      if (attempt < FETCH_MAX_RETRIES) {
+        await sleep(retryDelayMs(attempt));
+        continue;
+      }
+      throw toNetworkError(err);
+    }
+  }
+
+  return lastResponse!;
 }
 
 export type ChatOptions = {
@@ -43,9 +125,6 @@ async function postChat(
     stream,
   });
 
-  const signal =
-    options.signal ?? AbortSignal.timeout(options.timeoutMs ?? 60_000);
-
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${env.API_KEY}`,
@@ -54,18 +133,22 @@ async function postChat(
     headers.Accept = "text/event-stream";
   }
 
-  return fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-    signal,
-  });
+  return fetchChatWithRetry(
+    endpoint,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    },
+    options,
+  );
 }
 
 async function throwForFailedResponse(response: Response): Promise<never> {
   const raw = await response.text();
+  const label = isClientHttpStatus(response.status) ? "客户端错误" : "服务端错误";
   throw new LlmApiError(
-    `LLM request failed (${response.status})`,
+    `LLM ${label} (${response.status})`,
     response.status,
     raw,
   );

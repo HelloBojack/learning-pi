@@ -1,6 +1,6 @@
 import { runOnce, runRepl } from "./repl";
 
-export { chat, chatStream, chatStreamToStdout, LlmApiError } from "./llm/chat";
+export { chat, chatStream, chatStreamToStdout, LlmApiError, LlmNetworkError } from "./llm/chat";
 export type { ChatMessage, ChatRole } from "./schemas/chat";
 export type { ChatOptions } from "./llm/chat";
 export { runRepl, runOnce } from "./repl";

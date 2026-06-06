@@ -1,4 +1,4 @@
-import { chatStreamToStdout, LlmApiError } from "./llm/chat";
+import { chatStreamToStdout, LlmApiError, LlmNetworkError } from "./llm/chat";
 import { withSystemPrompt } from "./prompts";
 import { tryHandleLocalCommand } from "./repl/commands";
 import { createInitialHistory } from "./repl/conversation";
@@ -45,8 +45,11 @@ export async function runRepl(): Promise<void> {
         history.push({ role: "assistant", content: reply });
       } catch (err) {
         history.pop();
-        if (err instanceof LlmApiError) {
-          console.error(`\n[错误 ${err.status}] ${err.message}`);
+        if (err instanceof LlmNetworkError) {
+          console.error(`\n[网络错误] ${err.message}`);
+        } else if (err instanceof LlmApiError) {
+          const tag = err.isClientError() ? "客户端错误" : "服务端错误";
+          console.error(`\n[${tag} ${err.status}] ${err.message}`);
           if (err.body) console.error(err.body);
         } else if (err instanceof Error) {
           console.error(`\n[错误] ${err.message}`);
