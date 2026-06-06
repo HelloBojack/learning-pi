@@ -1,5 +1,7 @@
 # learning-pi
 
+![CI](https://github.com/HelloBojack/learning-pi/actions/workflows/ci.yml/badge.svg)
+
 To install dependencies:
 
 ```bash

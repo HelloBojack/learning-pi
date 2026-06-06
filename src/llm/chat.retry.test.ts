@@ -6,9 +6,14 @@ import {
   test,
 } from "bun:test";
 import { clearStubEnv, stubRequiredEnv } from "../test/helpers";
-import { chat, LlmApiError, LlmNetworkError } from "./chat";
+import { chat, type ChatOptions, LlmApiError, LlmNetworkError } from "./chat";
 
 const originalFetch = globalThis.fetch;
+
+/** 跳过重试退避，避免测试/CI 等待真实 delay。 */
+const instantRetry: ChatOptions = {
+  retryBackoff: async () => {},
+};
 
 function okChatResponse(content = "hello"): Response {
   return new Response(
@@ -36,7 +41,9 @@ describe("chat fetch retry", () => {
       return new Response('{"error":"unauthorized"}', { status: 401 });
     };
 
-    const err = await chat([{ role: "user", content: "hi" }]).catch((e) => e);
+    const err = await chat([{ role: "user", content: "hi" }], instantRetry).catch(
+      (e) => e,
+    );
     expect(err).toBeInstanceOf(LlmApiError);
     expect((err as LlmApiError).status).toBe(401);
     expect((err as LlmApiError).isClientError()).toBe(true);
@@ -53,7 +60,7 @@ describe("chat fetch retry", () => {
       return okChatResponse("recovered");
     };
 
-    const reply = await chat([{ role: "user", content: "hi" }]);
+    const reply = await chat([{ role: "user", content: "hi" }], instantRetry);
     expect(calls).toBe(2);
     expect(reply).toBe("recovered");
   });
@@ -68,7 +75,7 @@ describe("chat fetch retry", () => {
       return okChatResponse("online");
     };
 
-    const reply = await chat([{ role: "user", content: "hi" }]);
+    const reply = await chat([{ role: "user", content: "hi" }], instantRetry);
     expect(calls).toBe(2);
     expect(reply).toBe("online");
   });
@@ -81,7 +88,7 @@ describe("chat fetch retry", () => {
     };
 
     await expect(
-      chat([{ role: "user", content: "hi" }]),
+      chat([{ role: "user", content: "hi" }], instantRetry),
     ).rejects.toBeInstanceOf(LlmNetworkError);
     expect(calls).toBe(3);
   });

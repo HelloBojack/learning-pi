@@ -63,6 +63,17 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitBeforeRetry(
+  attempt: number,
+  options: ChatOptions,
+): Promise<void> {
+  if (options.retryBackoff) {
+    await options.retryBackoff(attempt);
+    return;
+  }
+  await sleep(retryDelayMs(attempt));
+}
+
 async function fetchChatWithRetry(
   endpoint: string,
   init: Omit<RequestInit, "signal">,
@@ -83,7 +94,7 @@ async function fetchChatWithRetry(
 
       lastResponse = response;
       if (isRetryableHttpStatus(response.status) && attempt < FETCH_MAX_RETRIES) {
-        await sleep(retryDelayMs(attempt));
+        await waitBeforeRetry(attempt, options);
         continue;
       }
       return response;
@@ -92,7 +103,7 @@ async function fetchChatWithRetry(
         throw toNetworkError(err);
       }
       if (attempt < FETCH_MAX_RETRIES) {
-        await sleep(retryDelayMs(attempt));
+        await waitBeforeRetry(attempt, options);
         continue;
       }
       throw toNetworkError(err);
@@ -107,6 +118,8 @@ export type ChatOptions = {
   temperature?: number;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** 重试前等待；测试可传入 no-op 以跳过真实退避。 */
+  retryBackoff?: (attempt: number) => Promise<void>;
 };
 
 async function postChat(
