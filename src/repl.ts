@@ -7,6 +7,7 @@ import {
 } from "./llm/chat";
 import { withSystemPrompt } from "./prompts";
 import { tryHandleLocalCommand } from "./repl/commands";
+import { formatTrimNotice } from "./repl/context";
 import { createInitialHistory } from "./repl/conversation";
 import { createSuggestingInterface, ReplInterrupt } from "./repl/input";
 import {
@@ -14,6 +15,7 @@ import {
 	loadLatestSession,
 	saveLatestSession,
 } from "./repl/session";
+import { compactHistoryIfNeeded, formatCompactNotice } from "./repl/summary";
 import type { ChatMessage } from "./schemas/chat";
 
 export async function runRepl(): Promise<void> {
@@ -21,9 +23,19 @@ export async function runRepl(): Promise<void> {
 	const restored = await loadLatestSession();
 	const history: ChatMessage[] = restored ?? createInitialHistory();
 
+	if (restored) {
+		const compact = await compactHistoryIfNeeded(history);
+		if (compact.summarized) {
+			console.log(formatCompactNotice(compact));
+		}
+		if (compact.trimmed && compact.trimmed.trimmedCount > 0) {
+			console.log(formatTrimNotice(compact.trimmed));
+		}
+	}
+
 	console.log("learning-pi 对话已启动（流式输出）");
 	if (restored) {
-		const turns = countConversationTurns(restored);
+		const turns = countConversationTurns(history);
 		console.log(`已恢复上次对话（${turns} 条消息）`);
 	}
 	console.log(
@@ -53,6 +65,14 @@ export async function runRepl(): Promise<void> {
 			if (local === "handled") continue;
 
 			history.push({ role: "user", content: line });
+
+			const compact = await compactHistoryIfNeeded(history);
+			if (compact.summarized) {
+				console.log(`\n${formatCompactNotice(compact)}\n`);
+			}
+			if (compact.trimmed && compact.trimmed.trimmedCount > 0) {
+				console.log(`\n${formatTrimNotice(compact.trimmed)}\n`);
+			}
 
 			const { cancel, signal } = createChatAbortControls();
 			const stopInterruptWatch = rl.onStreamInterrupt(() => cancel.abort());

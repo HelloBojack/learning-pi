@@ -4,7 +4,11 @@ import {
 	type PresetPromptId,
 } from "../prompts";
 import type { ChatMessage } from "../schemas/chat";
-import { printContextUsage } from "./context";
+import {
+	formatContextUsage,
+	formatContextUsageWithSummary,
+	summarizeContextUsage,
+} from "./context";
 import {
 	applyPresetSwitch,
 	clearConversation,
@@ -12,6 +16,7 @@ import {
 	printConversationHistory,
 	printPresetCatalog,
 } from "./conversation";
+import { getStoredSummary, printStoredSummary } from "./summary";
 
 export const COMMAND_PREFIX = "/";
 
@@ -29,6 +34,7 @@ const META_COMMANDS: ReplCommand[] = [
 	{ id: "clear", label: "清空对话" },
 	{ id: "history", label: "查看对话历史" },
 	{ id: "tokens", label: "估算上下文 token" },
+	{ id: "summary", label: "查看对话摘要" },
 	{
 		id: "presets",
 		label: "列出 preset",
@@ -79,6 +85,7 @@ function printHelp(): void {
   /clear       清空对话（保留 system prompt）
   /history     查看当前对话历史
   /tokens      估算当前上下文 token / 字符占用
+  /summary     查看完整对话摘要（上下文压缩后生成）
   /presets     列出 preset（别名：/list、/prompts）
   /current     查看当前 preset
   /default     通用助手
@@ -145,7 +152,17 @@ export function tryHandleLocalCommand(
 	}
 
 	if (cmd === "tokens") {
-		printContextUsage(history);
+		const usage = summarizeContextUsage(history);
+		const summary = getStoredSummary(history);
+		const text = summary
+			? formatContextUsageWithSummary(usage, summary)
+			: formatContextUsage(usage);
+		console.log(`\n${text}\n`);
+		return "handled";
+	}
+
+	if (cmd === "summary") {
+		printStoredSummary(history);
 		return "handled";
 	}
 

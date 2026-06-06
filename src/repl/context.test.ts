@@ -6,7 +6,9 @@ import {
 	estimateHistoryTokens,
 	estimateTextTokens,
 	getContextTokenLimit,
+	getTrimTokenBudget,
 	summarizeContextUsage,
+	trimHistoryToTokenLimit,
 } from "./context";
 
 describe("context token estimate", () => {
@@ -62,5 +64,60 @@ describe("context token estimate", () => {
 	test("getContextTokenLimit reads positive integer from env", () => {
 		process.env.CONTEXT_TOKEN_LIMIT = "32000";
 		expect(getContextTokenLimit()).toBe(32000);
+	});
+});
+
+describe("trimHistoryToTokenLimit", () => {
+	beforeEach(() => {
+		stubRequiredEnv();
+		delete process.env.CONTEXT_TOKEN_LIMIT;
+	});
+
+	afterEach(() => {
+		clearStubEnv();
+		delete process.env.CONTEXT_TOKEN_LIMIT;
+	});
+
+	test("does nothing when under budget", () => {
+		const history: ChatMessage[] = [
+			{ role: "system", content: "sys" },
+			{ role: "user", content: "hi" },
+		];
+
+		const result = trimHistoryToTokenLimit(history, 10_000);
+		expect(result.trimmedCount).toBe(0);
+		expect(history).toHaveLength(2);
+	});
+
+	test("removes oldest user/assistant pair and keeps system", () => {
+		const history: ChatMessage[] = [
+			{ role: "system", content: "s" },
+			{ role: "user", content: "a".repeat(200) },
+			{ role: "assistant", content: "b".repeat(200) },
+			{ role: "user", content: "latest" },
+		];
+
+		const result = trimHistoryToTokenLimit(history, 80);
+		expect(result.trimmedCount).toBe(2);
+		expect(history.map((m) => m.role)).toEqual(["system", "user"]);
+		expect(history[1]?.content).toBe("latest");
+		expect(estimateHistoryTokens(history)).toBeLessThanOrEqual(80);
+	});
+
+	test("keeps at least the latest user message even when over budget", () => {
+		const history: ChatMessage[] = [
+			{ role: "system", content: "s" },
+			{ role: "user", content: "x".repeat(500) },
+		];
+
+		const result = trimHistoryToTokenLimit(history, 50);
+		expect(result.trimmedCount).toBe(0);
+		expect(history).toHaveLength(2);
+		expect(estimateHistoryTokens(history)).toBeGreaterThan(50);
+	});
+
+	test("getTrimTokenBudget reserves space for generation", () => {
+		process.env.CONTEXT_TOKEN_LIMIT = "5000";
+		expect(getTrimTokenBudget()).toBe(5000 - 1024);
 	});
 });

@@ -6,6 +6,9 @@ const MESSAGE_OVERHEAD_TOKENS = 4;
 /** 未配置 CONTEXT_TOKEN_LIMIT 时的默认 context 上限。 */
 export const DEFAULT_CONTEXT_TOKEN_LIMIT = 8192;
 
+/** 发送前为即将生成的 assistant 回复预留的 token（heuristic）。 */
+export const GENERATION_RESERVE_TOKENS = 1024;
+
 const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
 
 export type ContextUsage = {
@@ -63,6 +66,75 @@ export function getContextTokenLimit(): number {
 	return Math.floor(parsed);
 }
 
+/** 裁剪时使用的有效上限（为 assistant 回复预留空间）。 */
+export function getTrimTokenBudget(): number {
+	const limit = getContextTokenLimit();
+	return Math.max(
+		MESSAGE_OVERHEAD_TOKENS * 2,
+		limit - GENERATION_RESERVE_TOKENS,
+	);
+}
+
+export type TrimHistoryResult = {
+	trimmedCount: number;
+	tokensBefore: number;
+	tokensAfter: number;
+};
+
+function countNonSystemMessages(messages: ChatMessage[]): number {
+	return messages.filter((m) => m.role !== "system").length;
+}
+
+/**
+ * 滑动窗口裁剪：保留 system，从最早轮次起删除 user/assistant，直到估算 token 低于预算。
+ * 至少保留 1 条非 system 消息（通常是当前 user 输入）。原地修改 history。
+ */
+export function trimHistoryToTokenLimit(
+	history: ChatMessage[],
+	budget?: number,
+): TrimHistoryResult {
+	const cap = budget ?? getTrimTokenBudget();
+	const tokensBefore = estimateHistoryTokens(history);
+
+	if (tokensBefore <= cap) {
+		return { trimmedCount: 0, tokensBefore, tokensAfter: tokensBefore };
+	}
+
+	let trimmedCount = 0;
+
+	while (estimateHistoryTokens(history) > cap) {
+		if (countNonSystemMessages(history) <= 1) break;
+
+		const firstTurnIdx = history.findIndex((m) => m.role !== "system");
+		if (firstTurnIdx === -1) break;
+
+		const removed = history[firstTurnIdx];
+		if (!removed) break;
+
+		history.splice(firstTurnIdx, 1);
+		trimmedCount += 1;
+
+		if (
+			removed.role === "user" &&
+			history[firstTurnIdx]?.role === "assistant"
+		) {
+			history.splice(firstTurnIdx, 1);
+			trimmedCount += 1;
+		}
+	}
+
+	return {
+		trimmedCount,
+		tokensBefore,
+		tokensAfter: estimateHistoryTokens(history),
+	};
+}
+
+export function formatTrimNotice(result: TrimHistoryResult): string {
+	if (result.trimmedCount === 0) return "";
+	return `[上下文] 已裁剪 ${result.trimmedCount} 条旧消息（约 ${formatNumber(result.tokensBefore)} → ${formatNumber(result.tokensAfter)} tokens）`;
+}
+
 export function summarizeContextUsage(messages: ChatMessage[]): ContextUsage {
 	const tokens = estimateHistoryTokens(messages);
 	const limit = getContextTokenLimit();
@@ -83,12 +155,25 @@ function formatNumber(n: number): string {
 
 export function formatContextUsage(usage: ContextUsage): string {
 	const usedPct = Math.min(100, Math.round((usage.tokens / usage.limit) * 100));
-	return [
+	const trimBudget = getTrimTokenBudget();
+	const lines = [
 		`上下文（估算）：约 ${formatNumber(usage.tokens)} / ${formatNumber(usage.limit)} tokens（${usedPct}%）`,
+		`自动裁剪预算：约 ${formatNumber(trimBudget)} tokens（预留 ${formatNumber(GENERATION_RESERVE_TOKENS)} 给回复）`,
 		`字符数：${formatNumber(usage.chars)}`,
 		`剩余（估算）：约 ${formatNumber(usage.remaining)} tokens`,
 		`消息：${usage.messageCount} 条（user/assistant ${usage.turnCount} 条）`,
-	].join("\n");
+	];
+	return lines.join("\n");
+}
+
+export function formatContextUsageWithSummary(
+	usage: ContextUsage,
+	summary: string | null,
+): string {
+	const base = formatContextUsage(usage);
+	if (!summary) return base;
+	const preview = summary.length > 120 ? `${summary.slice(0, 120)}…` : summary;
+	return `${base}\n对话摘要：${preview}`;
 }
 
 export function printContextUsage(history: ChatMessage[]): void {
