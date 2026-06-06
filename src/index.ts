@@ -9,8 +9,8 @@ export {
   withSystemPrompt,
   PRESET_PROMPTS,
   getActivePresetId,
-} from "./prompt";
-export type { PresetPromptId } from "./prompt";
+} from "./prompts";
+export type { PresetPromptId } from "./prompts";
 
 if (import.meta.main) {
   const oneShot = process.argv.slice(2).join(" ").trim();

@@ -1,27 +1,39 @@
 import { chatStreamToStdout, LlmApiError } from "./llm/chat";
-import {
-  createInitialHistory,
-  tryHandlePromptCommand,
-  withSystemPrompt,
-} from "./prompt";
-import { createSuggestingInterface } from "./repl/input";
+import { withSystemPrompt } from "./prompts";
+import { tryHandleLocalCommand } from "./repl/commands";
+import { createInitialHistory } from "./repl/conversation";
+import { createSuggestingInterface, ReplInterrupt } from "./repl/input";
 import type { ChatMessage } from "./schemas/chat";
-
-const EXIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
 
 export async function runRepl(): Promise<void> {
   const rl = createSuggestingInterface();
   const history: ChatMessage[] = createInitialHistory();
 
   console.log("learning-pi 对话已启动（流式输出）");
-  console.log("输入 \\ 呼出命令列表（↑↓ 选择，Enter 确认），/quit 退出\n");
+  console.log(
+    "输入 / 呼出命令菜单（↑↓ 选择），/help 查看全部，/quit 或 Ctrl+C 退出\n",
+  );
 
   try {
     while (true) {
-      const line = (await rl.question("you> ")).trim();
+      let line: string;
+      try {
+        line = (await rl.question("you> ")).trim();
+      } catch (err) {
+        if (err instanceof ReplInterrupt) {
+          console.log("再见。\n");
+          break;
+        }
+        throw err;
+      }
       if (!line) continue;
-      if (EXIT_COMMANDS.has(line.toLowerCase())) break;
-      if (tryHandlePromptCommand(line, history)) continue;
+
+      const local = tryHandleLocalCommand(line, history);
+      if (local === "exit") {
+        console.log("再见。\n");
+        break;
+      }
+      if (local === "handled") continue;
 
       history.push({ role: "user", content: line });
 

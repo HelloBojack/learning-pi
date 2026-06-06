@@ -1,23 +1,42 @@
 import * as readline from "node:readline";
 import { stdin, stdout } from "node:process";
 import {
-  getBackslashCommands,
-  type BackslashCommand,
-} from "../prompt";
+  COMMAND_PREFIX,
+  formatCommand,
+  getReplCommands,
+  type ReplCommand,
+} from "./commands";
 
 const MAX_SUGGESTIONS = 8;
+
+/** Ctrl+C 中断输入时抛出，由 REPL 捕获后正常退出。 */
+export class ReplInterrupt extends Error {
+  constructor() {
+    super("REPL interrupted");
+    this.name = "ReplInterrupt";
+  }
+}
 
 export type SuggestingInterface = {
   question(prompt: string): Promise<string>;
   close(): void;
 };
 
+function isCommandInput(line: string): boolean {
+  return line.startsWith(COMMAND_PREFIX);
+}
+
+function commandFragment(line: string): string {
+  if (line.startsWith(COMMAND_PREFIX)) return line.slice(COMMAND_PREFIX.length);
+  return "";
+}
+
 function filterByFragment(
   fragment: string,
-  commands: BackslashCommand[],
-): BackslashCommand[] {
+  commands: ReplCommand[],
+): ReplCommand[] {
   const q = fragment.toLowerCase();
-  return commands.filter((item) => item.command.startsWith(q));
+  return commands.filter((item) => item.id.startsWith(q));
 }
 
 function visibleWindow<T>(items: T[], selectedIndex: number, size: number): {
@@ -34,33 +53,59 @@ function visibleWindow<T>(items: T[], selectedIndex: number, size: number): {
 }
 
 /**
- * 带 \\ 命令提示的输入：
- * - 输入 \\ 后下方显示候选
+ * 带 / 命令提示的输入：
+ * - 输入 / 后下方显示候选
  * - ↑ / ↓ 切换选中项，Enter 确认，Tab 补全当前选中项
  */
 export function createSuggestingInterface(): SuggestingInterface {
-  const commands = getBackslashCommands();
+  const commands = getReplCommands();
   let closed = false;
   let asking = false;
   let resolveQuestion: ((value: string) => void) | null = null;
+  let rejectQuestion: ((reason: ReplInterrupt) => void) | null = null;
 
   let promptText = "you> ";
-  /** 输入框显示内容 */
   let line = "";
   /** 仅随用户键入更新，用于筛选；方向键切换时不改，避免列表缩成一项 */
   let filterFragment = "";
   let selectedIndex = 0;
-  let matches: BackslashCommand[] = [];
+  let matches: ReplCommand[] = [];
   let panelOpen = false;
 
   readline.emitKeypressEvents(stdin);
   const wasRaw = stdin.isRaw ?? false;
-  if (stdin.isTTY && stdin.setRawMode) {
-    stdin.setRawMode(true);
+  let inputActive = false;
+  let released = false;
+
+  function beginInput(): void {
+    if (inputActive) return;
+    inputActive = true;
+    if (stdin.isTTY && stdin.setRawMode) {
+      stdin.setRawMode(true);
+    }
+    stdin.resume();
+  }
+
+  function endInput(): void {
+    if (!inputActive) return;
+    inputActive = false;
+    clearPanel();
+    if (stdin.isTTY && stdin.setRawMode) {
+      stdin.setRawMode(wasRaw);
+    }
+    stdin.pause();
+  }
+
+  function releaseTerminal(): void {
+    if (released) return;
+    released = true;
+    endInput();
+    stdin.off("keypress", onKeypress);
+    stdin.unref?.();
   }
 
   function syncMatches(): void {
-    if (!line.startsWith("\\")) {
+    if (!isCommandInput(line)) {
       matches = [];
       return;
     }
@@ -74,18 +119,18 @@ export function createSuggestingInterface(): SuggestingInterface {
 
   function clearPanel(): void {
     if (!panelOpen) return;
-    stdout.write("\x1B[u"); // 恢复到输入行末尾（上次 \x1B[s）
-    stdout.write("\x1B[J"); // 清除输入行以下区域
+    stdout.write("\x1B[u");
+    stdout.write("\x1B[J");
     panelOpen = false;
   }
 
   function drawPanel(): void {
-    if (!line.startsWith("\\") || matches.length === 0) {
+    if (!isCommandInput(line) || matches.length === 0) {
       clearPanel();
       return;
     }
 
-    stdout.write("\x1B[s"); // 保存：输入行末尾
+    stdout.write("\x1B[s");
 
     const { items: shown, start } = visibleWindow(
       matches,
@@ -101,7 +146,7 @@ export function createSuggestingInterface(): SuggestingInterface {
       const color = selected ? "\x1b[36m\x1b[1m" : "\x1b[90m";
       const marker = selected ? "› " : "  ";
       stdout.write(
-        `${marker}${color}\\${item.command}\x1b[0m  ${item.label}\n`,
+        `${marker}${color}${formatCommand(item.id)}\x1b[0m  ${item.label}\n`,
       );
     }
 
@@ -111,7 +156,7 @@ export function createSuggestingInterface(): SuggestingInterface {
         : "↑↓ 选择 · Enter 确认 · Tab 补全";
     stdout.write(`  \x1b[90m${hint}\x1b[0m\n`);
 
-    stdout.write("\x1B[u"); // 回到输入行末尾
+    stdout.write("\x1B[u");
     readline.cursorTo(stdout, promptText.length + line.length);
     panelOpen = true;
   }
@@ -130,15 +175,17 @@ export function createSuggestingInterface(): SuggestingInterface {
   function applySelectedToLine(): void {
     const item = matches[selectedIndex];
     if (!item) return;
-    line = `\\${item.command}`;
+    line = formatCommand(item.id);
+    // filterFragment 仅随用户键入更新；方向键不改，避免列表缩成一项
   }
 
   function finishQuestion(answer: string): void {
-    clearPanel();
+    endInput();
     stdout.write("\n");
     asking = false;
     const resolve = resolveQuestion;
     resolveQuestion = null;
+    rejectQuestion = null;
     line = "";
     filterFragment = "";
     selectedIndex = 0;
@@ -150,12 +197,14 @@ export function createSuggestingInterface(): SuggestingInterface {
     if (!asking || closed) return;
 
     if (key.ctrl && key.name === "c") {
-      clearPanel();
+      endInput();
       stdout.write("\n");
-      if (stdin.isTTY && stdin.setRawMode) {
-        stdin.setRawMode(wasRaw);
-      }
-      process.exit(130);
+      asking = false;
+      const reject = rejectQuestion;
+      resolveQuestion = null;
+      rejectQuestion = null;
+      reject?.(new ReplInterrupt());
+      return;
     }
 
     if (key.name === "return" || key.name === "enter") {
@@ -163,7 +212,7 @@ export function createSuggestingInterface(): SuggestingInterface {
       return;
     }
 
-    const menuOpen = line.startsWith("\\") && matches.length > 0;
+    const menuOpen = isCommandInput(line) && matches.length > 0;
 
     if (menuOpen && key.name === "up") {
       selectedIndex = (selectedIndex - 1 + matches.length) % matches.length;
@@ -187,7 +236,9 @@ export function createSuggestingInterface(): SuggestingInterface {
 
     if (key.name === "backspace") {
       line = line.slice(0, -1);
-      filterFragment = line.startsWith("\\") ? line.slice(1).toLowerCase() : "";
+      filterFragment = isCommandInput(line)
+        ? commandFragment(line).toLowerCase()
+        : "";
       selectedIndex = 0;
       redraw();
       return;
@@ -195,7 +246,9 @@ export function createSuggestingInterface(): SuggestingInterface {
 
     if (str && !key.ctrl && !key.meta) {
       line += str;
-      filterFragment = line.startsWith("\\") ? line.slice(1).toLowerCase() : "";
+      filterFragment = isCommandInput(line)
+        ? commandFragment(line).toLowerCase()
+        : "";
       selectedIndex = 0;
       redraw();
     }
@@ -216,21 +269,21 @@ export function createSuggestingInterface(): SuggestingInterface {
       matches = [];
       panelOpen = false;
       stdout.write(prompt);
-      return new Promise((resolve) => {
+      beginInput();
+      return new Promise((resolve, reject) => {
         resolveQuestion = resolve;
+        rejectQuestion = reject;
       });
     },
     close() {
       if (closed) return;
       closed = true;
-      clearPanel();
-      stdin.off("keypress", onKeypress);
-      if (stdin.isTTY && stdin.setRawMode) {
-        stdin.setRawMode(wasRaw);
-      }
       if (asking) {
-        finishQuestion("");
+        asking = false;
+        resolveQuestion = null;
+        rejectQuestion = null;
       }
+      releaseTerminal();
     },
   };
 }
