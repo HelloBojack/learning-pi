@@ -5,6 +5,7 @@ const EnvSchema = z.object({
   API_KEY: z.string().min(1),
   API_CHAT_PATH: z.string().optional(),
   API_MODEL: z.string().optional(),
+  SYSTEM_PROMPT: z.string().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -15,6 +16,7 @@ export function loadEnv(): Env {
     API_KEY: process.env.API_KEY,
     API_CHAT_PATH: process.env.API_CHAT_PATH,
     API_MODEL: process.env.API_MODEL,
+    SYSTEM_PROMPT: process.env.SYSTEM_PROMPT,
   });
 
   if (!parsed.success) {

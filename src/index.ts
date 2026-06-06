@@ -4,6 +4,13 @@ export { chat, chatStream, chatStreamToStdout, LlmApiError } from "./llm/chat";
 export type { ChatMessage, ChatRole } from "./schemas/chat";
 export type { ChatOptions } from "./llm/chat";
 export { runRepl, runOnce } from "./repl";
+export {
+  getSystemPrompt,
+  withSystemPrompt,
+  PRESET_PROMPTS,
+  getActivePresetId,
+} from "./prompt";
+export type { PresetPromptId } from "./prompt";
 
 if (import.meta.main) {
   const oneShot = process.argv.slice(2).join(" ").trim();

@@ -1,22 +1,27 @@
-import * as readline from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
 import { chatStreamToStdout, LlmApiError } from "./llm/chat";
+import {
+  createInitialHistory,
+  tryHandlePromptCommand,
+  withSystemPrompt,
+} from "./prompt";
+import { createSuggestingInterface } from "./repl/input";
 import type { ChatMessage } from "./schemas/chat";
 
 const EXIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
 
 export async function runRepl(): Promise<void> {
-  const rl = readline.createInterface({ input, output });
-  const history: ChatMessage[] = [];
+  const rl = createSuggestingInterface();
+  const history: ChatMessage[] = createInitialHistory();
 
   console.log("learning-pi 对话已启动（流式输出）");
-  console.log("输入消息后回车发送，/quit 或 Ctrl+C 退出\n");
+  console.log("输入 \\ 呼出命令列表（↑↓ 选择，Enter 确认），/quit 退出\n");
 
   try {
     while (true) {
       const line = (await rl.question("you> ")).trim();
       if (!line) continue;
       if (EXIT_COMMANDS.has(line.toLowerCase())) break;
+      if (tryHandlePromptCommand(line, history)) continue;
 
       history.push({ role: "user", content: line });
 
@@ -45,6 +50,8 @@ export async function runRepl(): Promise<void> {
 }
 
 export async function runOnce(prompt: string): Promise<void> {
-  await chatStreamToStdout([{ role: "user", content: prompt }]);
+  await chatStreamToStdout(
+    withSystemPrompt([{ role: "user", content: prompt }]),
+  );
   console.log();
 }
