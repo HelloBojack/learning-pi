@@ -55,6 +55,10 @@ export function switchActivePreset(id: PresetPromptId): ChatMessage[] {
   return [systemMessageForPreset(id)];
 }
 
+export function setActivePresetId(id: PresetPromptId): void {
+  activePresetId = id;
+}
+
 export function withSystemPrompt(messages: ChatMessage[]): ChatMessage[] {
   if (messages.some((m) => m.role === "system")) {
     return messages;

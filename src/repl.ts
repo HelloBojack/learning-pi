@@ -3,13 +3,23 @@ import { withSystemPrompt } from "./prompts";
 import { tryHandleLocalCommand } from "./repl/commands";
 import { createInitialHistory } from "./repl/conversation";
 import { createSuggestingInterface, ReplInterrupt } from "./repl/input";
+import {
+  countConversationTurns,
+  loadLatestSession,
+  saveLatestSession,
+} from "./repl/session";
 import type { ChatMessage } from "./schemas/chat";
 
 export async function runRepl(): Promise<void> {
   const rl = createSuggestingInterface();
-  const history: ChatMessage[] = createInitialHistory();
+  const restored = await loadLatestSession();
+  const history: ChatMessage[] = restored ?? createInitialHistory();
 
   console.log("learning-pi 对话已启动（流式输出）");
+  if (restored) {
+    const turns = countConversationTurns(restored);
+    console.log(`已恢复上次对话（${turns} 条消息）`);
+  }
   console.log(
     "输入 / 呼出命令菜单（↑↓ 选择），/help 查看全部，/quit 或 Ctrl+C 退出\n",
   );
@@ -61,6 +71,7 @@ export async function runRepl(): Promise<void> {
     }
   } finally {
     rl.close();
+    await saveLatestSession(history);
   }
 }
 
