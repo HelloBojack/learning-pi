@@ -33,6 +33,20 @@ export class LlmNetworkError extends Error {
 	}
 }
 
+/** 用户主动取消（如 Ctrl+C）；partialContent 为已收到的文本。 */
+export class LlmCancelledError extends Error {
+	readonly partialContent: string;
+
+	constructor(partialContent: string, options?: { cause?: unknown }) {
+		super("已取消");
+		this.name = "LlmCancelledError";
+		this.partialContent = partialContent;
+		if (options?.cause !== undefined) {
+			this.cause = options.cause;
+		}
+	}
+}
+
 const FETCH_MAX_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 500;
 
@@ -57,6 +71,45 @@ function toNetworkError(err: unknown): LlmNetworkError {
 		return new LlmNetworkError(`网络请求失败: ${err.message}`, { cause: err });
 	}
 	return new LlmNetworkError("网络请求失败", { cause: err });
+}
+
+function isAbortError(err: unknown): boolean {
+	return (
+		(err instanceof DOMException && err.name === "AbortError") ||
+		(err instanceof Error && err.name === "AbortError")
+	);
+}
+
+function throwIfUserCancelled(
+	options: ChatOptions,
+	partial: string,
+	cause?: unknown,
+): void {
+	if (options.cancelSignal?.aborted) {
+		throw new LlmCancelledError(partial, {
+			cause: cause ?? options.cancelSignal.reason,
+		});
+	}
+}
+
+function rethrowStreamError(
+	err: unknown,
+	options: ChatOptions,
+	partial: string,
+): never {
+	if (options.cancelSignal?.aborted) {
+		throw new LlmCancelledError(partial, { cause: err });
+	}
+	if (isAbortError(err) && options.signal?.aborted) {
+		throw toNetworkError(err);
+	}
+	if (err instanceof LlmApiError || err instanceof LlmNetworkError) {
+		throw err;
+	}
+	if (err instanceof Error && err.message) {
+		throw new LlmApiError(err.message, 200, partial);
+	}
+	throw err;
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -102,7 +155,8 @@ async function fetchChatWithRetry(
 			}
 			return response;
 		} catch (err) {
-			if (options.signal?.aborted) {
+			if (options.signal?.aborted || options.cancelSignal?.aborted) {
+				throwIfUserCancelled(options, "");
 				throw toNetworkError(err);
 			}
 			if (attempt < FETCH_MAX_RETRIES) {
@@ -123,10 +177,25 @@ export type ChatOptions = {
 	model?: string;
 	temperature?: number;
 	signal?: AbortSignal;
+	/** 用户主动取消（如 Ctrl+C）；与 signal 组合时可区分超时与取消。 */
+	cancelSignal?: AbortSignal;
 	timeoutMs?: number;
 	/** 重试前等待；测试可传入 no-op 以跳过真实退避。 */
 	retryBackoff?: (attempt: number) => Promise<void>;
 };
+
+/** 合并用户取消与超时，供 REPL / CLI 使用。 */
+export function createChatAbortControls(timeoutMs = 60_000): {
+	cancel: AbortController;
+	signal: AbortSignal;
+} {
+	const cancel = new AbortController();
+	const signal = AbortSignal.any([
+		cancel.signal,
+		AbortSignal.timeout(timeoutMs),
+	]);
+	return { cancel, signal };
+}
 
 async function postChat(
 	messages: ChatMessage[],
@@ -215,43 +284,55 @@ export async function* chatStream(
 	messages: ChatMessage[],
 	options: ChatOptions = {},
 ): AsyncGenerator<string, string> {
-	const response = await postChat(messages, options, true);
-
-	if (!response.ok) {
-		await throwForFailedResponse(response);
-	}
-
-	const contentType = response.headers.get("content-type") ?? "";
-
-	// 部分网关在 stream:true 时仍返回整段 JSON
-	if (contentType.includes("application/json")) {
-		const raw = await response.text();
-		const content = await parseJsonChatResponse(response, raw);
-		for (const char of content) {
-			yield char;
-		}
-		return content;
-	}
-
-	if (!response.body) {
-		throw new LlmApiError("LLM returned no response body", response.status, "");
-	}
-
 	let full = "";
+
 	try {
-		for await (const chunk of readOpenAiSseStream(response.body)) {
+		const response = await postChat(messages, options, true);
+
+		if (!response.ok) {
+			await throwForFailedResponse(response);
+		}
+
+		const contentType = response.headers.get("content-type") ?? "";
+
+		// 部分网关在 stream:true 时仍返回整段 JSON
+		if (contentType.includes("application/json")) {
+			const raw = await response.text();
+			throwIfUserCancelled(options, full);
+			const content = await parseJsonChatResponse(response, raw);
+			for (const char of content) {
+				throwIfUserCancelled(options, full);
+				full += char;
+				yield char;
+			}
+			return content;
+		}
+
+		if (!response.body) {
+			throw new LlmApiError(
+				"LLM returned no response body",
+				response.status,
+				"",
+			);
+		}
+
+		for await (const chunk of readOpenAiSseStream(response.body, {
+			signal: options.signal,
+		})) {
+			throwIfUserCancelled(options, full);
 			full += chunk;
 			yield chunk;
 		}
 	} catch (err) {
-		if (err instanceof Error && err.message) {
-			throw new LlmApiError(err.message, response.status, full);
+		if (err instanceof LlmCancelledError) throw err;
+		if (options.cancelSignal?.aborted) {
+			throw new LlmCancelledError(full, { cause: err });
 		}
-		throw err;
+		rethrowStreamError(err, options, full);
 	}
 
 	if (!full) {
-		throw new LlmApiError("LLM returned empty stream", response.status, "");
+		throw new LlmApiError("LLM returned empty stream", 200, "");
 	}
 
 	return full;
@@ -274,7 +355,7 @@ export async function chat(
 	return parseJsonChatResponse(response, raw);
 }
 
-/** 消费流式输出并写入 stdout，返回完整文本。 */
+/** 消费流式输出并写入 stdout，返回完整文本（取消时抛出 LlmCancelledError 并携带已输出片段）。 */
 export async function chatStreamToStdout(
 	messages: ChatMessage[],
 	options: ChatOptions = {},
@@ -284,10 +365,20 @@ export async function chatStreamToStdout(
 	if (prefix) process.stdout.write(prefix);
 
 	let full = "";
-	for await (const chunk of chatStream(messages, options)) {
-		await writeChunkToStdout(chunk);
-		full += chunk;
+	try {
+		for await (const chunk of chatStream(messages, options)) {
+			throwIfUserCancelled(options, full);
+			await writeChunkToStdout(chunk);
+			full += chunk;
+		}
+	} catch (err) {
+		if (err instanceof LlmCancelledError) throw err;
+		if (options.cancelSignal?.aborted) {
+			throw new LlmCancelledError(full, { cause: err });
+		}
+		throw err;
 	}
 
+	throwIfUserCancelled(options, full);
 	return full;
 }

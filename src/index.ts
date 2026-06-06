@@ -5,7 +5,9 @@ export {
 	chat,
 	chatStream,
 	chatStreamToStdout,
+	createChatAbortControls,
 	LlmApiError,
+	LlmCancelledError,
 	LlmNetworkError,
 } from "./llm/chat";
 export type { PresetPromptId } from "./prompts";

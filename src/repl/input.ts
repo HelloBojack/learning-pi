@@ -19,6 +19,8 @@ export class ReplInterrupt extends Error {
 
 export type SuggestingInterface = {
 	question(prompt: string): Promise<string>;
+	/** 流式输出期间监听 Ctrl+C；返回 cleanup。 */
+	onStreamInterrupt(handler: () => void): () => void;
 	close(): void;
 };
 
@@ -67,6 +69,7 @@ export function createSuggestingInterface(): SuggestingInterface {
 	let asking = false;
 	let resolveQuestion: ((value: string) => void) | null = null;
 	let rejectQuestion: ((reason: ReplInterrupt) => void) | null = null;
+	let streamInterruptHandler: (() => void) | null = null;
 
 	let promptText = "you> ";
 	let line = "";
@@ -197,9 +200,14 @@ export function createSuggestingInterface(): SuggestingInterface {
 	}
 
 	function onKeypress(str: string | undefined, key: readline.Key): void {
-		if (!asking || closed) return;
+		if (closed) return;
 
 		if (key.ctrl && key.name === "c") {
+			if (streamInterruptHandler) {
+				streamInterruptHandler();
+				return;
+			}
+			if (!asking) return;
 			endInput();
 			stdout.write("\n");
 			asking = false;
@@ -209,6 +217,12 @@ export function createSuggestingInterface(): SuggestingInterface {
 			reject?.(new ReplInterrupt());
 			return;
 		}
+
+		if (streamInterruptHandler && !asking) {
+			return;
+		}
+
+		if (!asking) return;
 
 		if (key.name === "return" || key.name === "enter") {
 			finishQuestion(line.trim());
@@ -281,12 +295,23 @@ export function createSuggestingInterface(): SuggestingInterface {
 		close() {
 			if (closed) return;
 			closed = true;
+			streamInterruptHandler = null;
 			if (asking) {
 				asking = false;
 				resolveQuestion = null;
 				rejectQuestion = null;
 			}
 			releaseTerminal();
+		},
+		onStreamInterrupt(handler: () => void): () => void {
+			streamInterruptHandler = handler;
+			beginInput();
+			return () => {
+				if (streamInterruptHandler === handler) {
+					streamInterruptHandler = null;
+					if (!asking) endInput();
+				}
+			};
 		},
 	};
 }

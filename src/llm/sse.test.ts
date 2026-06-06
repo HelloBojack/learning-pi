@@ -70,4 +70,25 @@ describe("readOpenAiSseStream", () => {
 
 		await expect(collectStream(body)).rejects.toThrow("rate limited");
 	});
+
+	test("stops when signal aborts mid-read", async () => {
+		const controller = new AbortController();
+		const body = encodeSse([
+			'data: {"choices":[{"delta":{"content":"a"}}]}',
+			'data: {"choices":[{"delta":{"content":"b"}}]}',
+		]);
+
+		const chunks: string[] = [];
+		const task = (async () => {
+			for await (const piece of readOpenAiSseStream(body, {
+				signal: controller.signal,
+			})) {
+				chunks.push(piece);
+				if (chunks.length === 1) controller.abort();
+			}
+		})();
+
+		await expect(task).rejects.toMatchObject({ name: "AbortError" });
+		expect(chunks).toEqual(["a"]);
+	});
 });

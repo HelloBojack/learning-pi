@@ -5,6 +5,7 @@ import { StreamChunkSchema } from "../schemas/chat";
  */
 export async function* readOpenAiSseStream(
 	body: ReadableStream<Uint8Array>,
+	options: { signal?: AbortSignal } = {},
 ): AsyncGenerator<string> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
@@ -12,6 +13,13 @@ export async function* readOpenAiSseStream(
 
 	try {
 		while (true) {
+			if (options.signal?.aborted) {
+				await reader.cancel(options.signal.reason);
+				throw (
+					options.signal.reason ?? new DOMException("Aborted", "AbortError")
+				);
+			}
+
 			const { done, value } = await reader.read();
 			if (done) break;
 			buffer += decoder.decode(value, { stream: true });
@@ -21,7 +29,15 @@ export async function* readOpenAiSseStream(
 				const line = buffer.slice(0, newlineIndex).trim();
 				buffer = buffer.slice(newlineIndex + 1);
 				const piece = parseSseDataLine(line);
-				if (piece) yield piece;
+				if (piece) {
+					yield piece;
+					if (options.signal?.aborted) {
+						await reader.cancel(options.signal.reason);
+						throw (
+							options.signal.reason ?? new DOMException("Aborted", "AbortError")
+						);
+					}
+				}
 				newlineIndex = buffer.indexOf("\n");
 			}
 		}

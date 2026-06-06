@@ -1,4 +1,10 @@
-import { chatStreamToStdout, LlmApiError, LlmNetworkError } from "./llm/chat";
+import {
+	chatStreamToStdout,
+	createChatAbortControls,
+	LlmApiError,
+	LlmCancelledError,
+	LlmNetworkError,
+} from "./llm/chat";
 import { withSystemPrompt } from "./prompts";
 import { tryHandleLocalCommand } from "./repl/commands";
 import { createInitialHistory } from "./repl/conversation";
@@ -21,7 +27,8 @@ export async function runRepl(): Promise<void> {
 		console.log(`已恢复上次对话（${turns} 条消息）`);
 	}
 	console.log(
-		"输入 / 呼出命令菜单（↑↓ 选择），/help 查看全部，/quit 或 Ctrl+C 退出\n",
+		"输入 / 呼出命令菜单（↑↓ 选择），/help 查看全部，/quit 退出\n" +
+			"输出过程中 Ctrl+C 中断当前回复，输入时 Ctrl+C 退出\n",
 	);
 
 	try {
@@ -47,17 +54,30 @@ export async function runRepl(): Promise<void> {
 
 			history.push({ role: "user", content: line });
 
+			const { cancel, signal } = createChatAbortControls();
+			const stopInterruptWatch = rl.onStreamInterrupt(() => cancel.abort());
+
 			try {
 				const reply = await chatStreamToStdout(
 					history,
-					{},
-					{
-						prefix: "assistant> ",
-					},
+					{ signal, cancelSignal: cancel.signal },
+					{ prefix: "assistant> " },
 				);
 				console.log("\n");
 				history.push({ role: "assistant", content: reply });
 			} catch (err) {
+				if (err instanceof LlmCancelledError) {
+					console.log("\n[已中断]");
+					if (err.partialContent) {
+						history.push({
+							role: "assistant",
+							content: err.partialContent,
+						});
+					}
+					console.log();
+					continue;
+				}
+
 				history.pop();
 				if (err instanceof LlmNetworkError) {
 					console.error(`\n[网络错误] ${err.message}`);
@@ -71,6 +91,8 @@ export async function runRepl(): Promise<void> {
 					console.error("\n[错误] 未知错误");
 				}
 				console.log();
+			} finally {
+				stopInterruptWatch();
 			}
 		}
 	} finally {
