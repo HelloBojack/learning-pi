@@ -22,6 +22,7 @@ export async function runRepl(): Promise<void> {
 	const rl = createSuggestingInterface();
 	const restored = await loadLatestSession();
 	const history: ChatMessage[] = restored ?? createInitialHistory();
+	const restoredTurnCount = restored ? countConversationTurns(history) : 0;
 
 	if (restored) {
 		const compact = await compactHistoryIfNeeded(history);
@@ -35,8 +36,7 @@ export async function runRepl(): Promise<void> {
 
 	console.log("learning-pi 对话已启动（流式输出）");
 	if (restored) {
-		const turns = countConversationTurns(history);
-		console.log(`已恢复上次对话（${turns} 条消息）`);
+		console.log(`已恢复上次对话（${restoredTurnCount} 条消息）`);
 	}
 	console.log(
 		"输入 / 呼出命令菜单（↑↓ 选择），/help 查看全部，/quit 退出\n" +
