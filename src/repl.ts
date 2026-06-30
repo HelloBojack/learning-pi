@@ -19,8 +19,24 @@ import {
 } from "./repl/session";
 import { compactHistoryIfNeeded, formatCompactNotice } from "./repl/summary";
 import type { ChatMessage } from "./schemas/chat";
+import { createToolRegistry, formatToolRegistrySummary } from "./tools/factory";
+import type { ToolRegistry } from "./tools/registry";
+
+async function withToolRegistry<T>(
+	fn: (registry: ToolRegistry) => Promise<T>,
+): Promise<T> {
+	const init = await createToolRegistry();
+	try {
+		return await fn(init.registry);
+	} finally {
+		await init.registry.close();
+	}
+}
 
 export async function runRepl(): Promise<void> {
+	const toolInit = await createToolRegistry();
+	const toolRegistry = toolInit.registry;
+
 	const rl = createSuggestingInterface();
 	const restored = await loadLatestSession();
 	const history: ChatMessage[] = restored ?? createInitialHistory();
@@ -37,12 +53,13 @@ export async function runRepl(): Promise<void> {
 	}
 
 	console.log("learning-pi 对话已启动（流式输出，支持工具调用）");
+	console.log(`工具：${formatToolRegistrySummary(toolInit)}`);
 	if (restored) {
 		console.log(`已恢复上次对话（${restoredTurnCount} 条消息）`);
 	}
 	console.log(
 		"输入 / 呼出命令菜单（↑↓ 选择），/help 查看全部，/quit 退出\n" +
-			"输出过程中 Ctrl+C 中断当前回复；可调用工具（如 calculate、get_current_time）\n",
+			"输出过程中 Ctrl+C 中断当前回复；支持本地工具与 MCP 远程工具\n",
 	);
 
 	try {
@@ -82,6 +99,7 @@ export async function runRepl(): Promise<void> {
 			try {
 				let prefixWritten = false;
 				const result = await runAgentLoop(history, {
+					toolRegistry,
 					signal,
 					cancelSignal: cancel.signal,
 					stream: true,
@@ -141,20 +159,24 @@ export async function runRepl(): Promise<void> {
 	} finally {
 		rl.close();
 		await saveLatestSession(history);
+		await toolRegistry.close();
 	}
 }
 
 export async function runOnce(prompt: string): Promise<void> {
-	const history = withSystemPrompt([{ role: "user", content: prompt }]);
-	const result = await runAgentLoop(history, {
-		stream: true,
-		onStreamChunk: writeChunkToStdout,
-		onToolStep: (step) => {
-			console.log(formatToolStepLog(step));
-		},
+	await withToolRegistry(async (toolRegistry) => {
+		const history = withSystemPrompt([{ role: "user", content: prompt }]);
+		const result = await runAgentLoop(history, {
+			toolRegistry,
+			stream: true,
+			onStreamChunk: writeChunkToStdout,
+			onToolStep: (step) => {
+				console.log(formatToolStepLog(step));
+			},
+		});
+		if (!result.streamed) {
+			console.log(result.finalText);
+		}
+		console.log();
 	});
-	if (!result.streamed) {
-		console.log(result.finalText);
-	}
-	console.log();
 }

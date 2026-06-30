@@ -31,6 +31,8 @@ export {
 	LlmCancelledError,
 	LlmNetworkError,
 } from "./llm/chat";
+export type { McpConfig, McpServerConfig } from "./mcp/config";
+export { loadMcpConfig } from "./mcp/config";
 export type { PresetPromptId } from "./prompts";
 export {
 	getActivePresetId,
@@ -45,6 +47,24 @@ export type {
 	ToolCall,
 	ToolDefinition,
 } from "./schemas/chat";
+export {
+	createToolRegistry,
+	formatToolRegistrySummary,
+	getLocalToolRegistry,
+} from "./tools/factory";
+export { createLocalToolRegistry } from "./tools/local";
+export {
+	defineLocalTool,
+	ToolRegistry,
+	toolMessageFromResult,
+} from "./tools/registry";
+export type {
+	LocalToolSpec,
+	RegisteredTool,
+	ToolExecutionContext,
+	ToolExecutor,
+	ToolSource,
+} from "./tools/types";
 
 if (import.meta.main) {
 	const oneShot = process.argv.slice(2).join(" ").trim();

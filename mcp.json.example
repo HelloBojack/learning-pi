@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "everything": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-everything"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["--system-certs", "mcp-server-fetch"],
+      "env": {
+        "SSL_CERT_FILE": "/path/to/corporate-ca.pem"
+      }
+    },
+    "remote-example": {
+      "url": "https://example.com/mcp",
+      "oauth": true,
+      "headers": {
+        "X-Custom-Header": "optional"
+      }
+    }
+  }
+}

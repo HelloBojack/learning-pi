@@ -5,11 +5,9 @@ import {
 	chatWithTools as defaultChatWithTools,
 } from "../llm/chat";
 import type { ChatMessage } from "../schemas/chat";
-import {
-	executeTool,
-	getToolDefinitions,
-	toolMessageFromResult,
-} from "./tools";
+import { getLocalToolRegistry } from "../tools/factory";
+import type { ToolRegistry } from "../tools/registry";
+import { toolMessageFromResult } from "../tools/registry";
 
 export type AgentLoopPartialResult = {
 	messagesAppended: ChatMessage[];
@@ -48,6 +46,7 @@ export type AgentLoopOptions = ChatWithToolsOptions & {
 	onToolStep?: (step: AgentToolStep) => void;
 	stream?: boolean;
 	onStreamChunk?: (chunk: string) => void | Promise<void>;
+	toolRegistry?: ToolRegistry;
 	chatWithTools?: (
 		messages: ChatMessage[],
 		options: ChatWithToolsOptions,
@@ -71,7 +70,7 @@ function parseToolCallArgs(argsJson: string): unknown {
 async function invokeLlm(
 	working: ChatMessage[],
 	options: AgentLoopOptions,
-	tools: ReturnType<typeof getToolDefinitions>,
+	tools: ReturnType<ToolRegistry["getDefinitions"]>,
 ): Promise<{ response: ChatWithToolsResult; streamed: boolean }> {
 	const llmOptions = { ...options, tools };
 
@@ -106,7 +105,8 @@ export async function runAgentLoop(
 	options: AgentLoopOptions = {},
 ): Promise<AgentLoopResult> {
 	const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
-	const tools = options.tools ?? getToolDefinitions();
+	const registry = options.toolRegistry ?? getLocalToolRegistry();
+	const tools = options.tools ?? registry.getDefinitions();
 	const working = [...history];
 	const messagesAppended: ChatMessage[] = [];
 	const steps: AgentToolStep[] = [];
@@ -136,7 +136,7 @@ export async function runAgentLoop(
 
 		for (const call of response.toolCalls) {
 			const args = parseToolCallArgs(call.function.arguments);
-			const result = await executeTool(
+			const result = await registry.execute(
 				call.function.name,
 				call.function.arguments,
 				{ history: working },
