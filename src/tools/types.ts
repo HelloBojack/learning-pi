@@ -1,7 +1,11 @@
+import type { PermissionMode } from "../permissions/types";
 import type { ChatMessage, ToolDefinition } from "../schemas/chat";
 
 export type ToolExecutionContext = {
 	history?: ChatMessage[];
+	permissionMode?: PermissionMode;
+	/** default 模式下 run_terminal_cmd 需用户确认时调用 */
+	confirm?: (message: string) => Promise<boolean>;
 };
 
 export type ToolExecutor = (

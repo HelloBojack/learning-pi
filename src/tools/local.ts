@@ -1,5 +1,6 @@
 import { getTrimTokenBudget, summarizeContextUsage } from "../repl/context";
 import type { ToolDefinition } from "../schemas/chat";
+import { registerCodingTools } from "./coding/index";
 import { defineLocalTool, ToolRegistry } from "./registry";
 import type { LocalToolSpec } from "./types";
 
@@ -150,7 +151,9 @@ export const LOCAL_TOOL_SPECS: LocalToolSpec[] = [
 				return JSON.stringify({ error: "invalid url" });
 			}
 			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-				return JSON.stringify({ error: "only http and https URLs are supported" });
+				return JSON.stringify({
+					error: "only http and https URLs are supported",
+				});
 			}
 
 			try {
@@ -170,8 +173,7 @@ export const LOCAL_TOOL_SPECS: LocalToolSpec[] = [
 					totalLength: body.length,
 				});
 			} catch (err) {
-				const message =
-					err instanceof Error ? err.message : "fetch failed";
+				const message = err instanceof Error ? err.message : "fetch failed";
 				return JSON.stringify({ error: message, url: parsed.toString() });
 			}
 		},
@@ -218,6 +220,7 @@ export function registerLocalTools(registry: ToolRegistry): void {
 	for (const spec of LOCAL_TOOL_SPECS) {
 		registry.registerLocal(spec);
 	}
+	registerCodingTools(registry);
 }
 
 export function createLocalToolRegistry(): ToolRegistry {

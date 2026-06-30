@@ -7,6 +7,7 @@ import {
 	LlmNetworkError,
 } from "./llm/chat";
 import { writeChunkToStdout } from "./llm/stdout";
+import { getPermissionModeFromEnv } from "./permissions/policy";
 import { withSystemPrompt } from "./prompts";
 import { tryHandleLocalCommand } from "./repl/commands";
 import { formatTrimNotice } from "./repl/context";
@@ -100,6 +101,13 @@ export async function runRepl(): Promise<void> {
 				let prefixWritten = false;
 				const result = await runAgentLoop(history, {
 					toolRegistry,
+					toolContext: {
+						permissionMode: getPermissionModeFromEnv(),
+						confirm: async (message) => {
+							const answer = (await rl.question(message)).trim().toLowerCase();
+							return answer === "y" || answer === "yes";
+						},
+					},
 					signal,
 					cancelSignal: cancel.signal,
 					stream: true,

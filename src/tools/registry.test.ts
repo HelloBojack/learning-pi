@@ -12,6 +12,9 @@ describe("ToolRegistry", () => {
 			"calculate",
 			"get_context_usage",
 			"fetch_url",
+			"read_file",
+			"grep",
+			"run_terminal_cmd",
 		]);
 	});
 
@@ -19,6 +22,34 @@ describe("ToolRegistry", () => {
 		const registry = createLocalToolRegistry();
 		const result = await registry.execute("calculate", '{"expression":"1+2"}');
 		expect(JSON.parse(result)).toEqual({ expression: "1+2", result: 3 });
+	});
+
+	test("denies run_terminal_cmd without confirm in default mode", async () => {
+		const registry = createLocalToolRegistry();
+		const result = await registry.execute(
+			"run_terminal_cmd",
+			'{"command":"echo hi"}',
+			{ permissionMode: "default" },
+		);
+		const parsed = JSON.parse(result) as { error: string; reason: string };
+		expect(parsed.error).toBe("permission denied");
+		expect(parsed.reason).toContain("non-interactive");
+	});
+
+	test("allows grep without confirmation", async () => {
+		const registry = createLocalToolRegistry();
+		const result = await registry.execute(
+			"grep",
+			'{"pattern":"grep","path":"package.json","max_results":1}',
+			{ permissionMode: "default" },
+		);
+		const parsed = JSON.parse(result) as {
+			matchCount?: number;
+			error?: string;
+			reason?: string;
+		};
+		expect(parsed.error).not.toBe("permission denied");
+		expect(typeof parsed.matchCount).toBe("number");
 	});
 
 	test("prefixes MCP tool name on collision", async () => {

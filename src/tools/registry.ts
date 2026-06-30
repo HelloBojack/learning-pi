@@ -1,5 +1,10 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createMcpRegisteredTool } from "../mcp/adapter";
+import {
+	evaluatePermission,
+	getPermissionModeFromEnv,
+	permissionDeniedMessage,
+} from "../permissions/policy";
 import type { ToolDefinition } from "../schemas/chat";
 import type {
 	LocalToolSpec,
@@ -128,6 +133,42 @@ export class ToolRegistry {
 				error: "invalid tool arguments JSON",
 				raw: argsJson,
 			});
+		}
+
+		const permissionMode = context.permissionMode ?? getPermissionModeFromEnv();
+		const permission = evaluatePermission(name, args, permissionMode);
+
+		if (permission === "deny") {
+			const reason =
+				name === "run_terminal_cmd"
+					? permissionMode === "dont-ask"
+						? "shell commands disabled in dont-ask mode"
+						: "command blocked by safety policy"
+					: "not allowed";
+			return permissionDeniedMessage(name, reason);
+		}
+
+		if (permission === "ask") {
+			const confirm = context.confirm;
+			if (!confirm) {
+				return permissionDeniedMessage(
+					name,
+					"confirmation required (non-interactive session)",
+				);
+			}
+			const command =
+				typeof args === "object" &&
+				args !== null &&
+				"command" in args &&
+				typeof (args as { command: unknown }).command === "string"
+					? (args as { command: string }).command.trim()
+					: "";
+			const approved = await confirm(
+				`Allow run_terminal_cmd?\n  $ ${command}\n[y/N] `,
+			);
+			if (!approved) {
+				return permissionDeniedMessage(name, "user denied");
+			}
 		}
 
 		try {

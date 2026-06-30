@@ -8,6 +8,8 @@ import type { ChatMessage } from "../schemas/chat";
 import { getLocalToolRegistry } from "../tools/factory";
 import type { ToolRegistry } from "../tools/registry";
 import { toolMessageFromResult } from "../tools/registry";
+import type { ToolExecutionContext } from "../tools/types";
+import { withCodingToolHints } from "./tool-hints";
 
 export type AgentLoopPartialResult = {
 	messagesAppended: ChatMessage[];
@@ -47,6 +49,7 @@ export type AgentLoopOptions = ChatWithToolsOptions & {
 	stream?: boolean;
 	onStreamChunk?: (chunk: string) => void | Promise<void>;
 	toolRegistry?: ToolRegistry;
+	toolContext?: Omit<ToolExecutionContext, "history">;
 	chatWithTools?: (
 		messages: ChatMessage[],
 		options: ChatWithToolsOptions,
@@ -113,8 +116,9 @@ export async function runAgentLoop(
 	let streamed = false;
 
 	for (let step = 0; step < maxSteps; step++) {
+		const llmMessages = withCodingToolHints(working, tools);
 		const { response, streamed: stepStreamed } = await invokeLlm(
-			working,
+			llmMessages,
 			options,
 			tools,
 		);
@@ -139,7 +143,7 @@ export async function runAgentLoop(
 			const result = await registry.execute(
 				call.function.name,
 				call.function.arguments,
-				{ history: working },
+				{ history: working, ...options.toolContext },
 			);
 
 			const toolStep: AgentToolStep = {
