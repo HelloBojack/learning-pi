@@ -6,6 +6,8 @@ export type ToolExecutionContext = {
 	permissionMode?: PermissionMode;
 	/** default 模式下 run_terminal_cmd 需用户确认时调用 */
 	confirm?: (message: string) => Promise<boolean>;
+	/** 本会话已确认过的操作，避免重复询问（参考 Agent.confirmedPaths） */
+	confirmedPaths?: Set<string>;
 };
 
 export type ToolExecutor = (

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { formatToolStepLog } from "./display";
+import { ZERO_TOKEN_USAGE } from "../schemas/chat";
+import { formatTokenUsageLine, formatToolStepLog } from "./display";
 
 describe("agent display", () => {
 	test("formatToolStepLog renders tool name, args, and result preview", () => {
@@ -13,5 +14,19 @@ describe("agent display", () => {
 		expect(line).toContain("[tool] get_current_time({})");
 		expect(line).toContain("[tool result]");
 		expect(line).toContain("2026-06-05");
+	});
+
+	test("formatTokenUsageLine estimates cost", () => {
+		const line = formatTokenUsageLine({
+			promptTokens: 1_000_000,
+			completionTokens: 1_000_000,
+			totalTokens: 2_000_000,
+		});
+		expect(line).toContain("1000000 in / 1000000 out");
+		expect(line).toContain("$18.0000");
+		expect(line.startsWith("[tokens]")).toBe(true);
+		expect(formatTokenUsageLine(ZERO_TOKEN_USAGE, "session")).toContain(
+			"[session]",
+		);
 	});
 });

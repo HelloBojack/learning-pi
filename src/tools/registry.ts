@@ -1,12 +1,6 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createMcpRegisteredTool } from "../mcp/adapter";
-import {
-	evaluatePermission,
-	formatPermissionConfirmPrompt,
-	getPermissionModeFromEnv,
-	permissionDeniedMessage,
-	permissionDeniedReason,
-} from "../permissions/policy";
+import { gateToolExecution } from "../permissions/policy";
 import type { ToolDefinition } from "../schemas/chat";
 import type {
 	LocalToolSpec,
@@ -119,7 +113,8 @@ export class ToolRegistry {
 		return this.tools.has(name);
 	}
 
-	async execute(
+	/** 执行工具（不含权限检查；供 Agent loop 在 gate 之后调用）。 */
+	async invoke(
 		name: string,
 		argsJson: string,
 		context: ToolExecutionContext = {},
@@ -137,30 +132,6 @@ export class ToolRegistry {
 			});
 		}
 
-		const permissionMode = context.permissionMode ?? getPermissionModeFromEnv();
-		const permission = evaluatePermission(name, args, permissionMode);
-
-		if (permission === "deny") {
-			return permissionDeniedMessage(
-				name,
-				permissionDeniedReason(name, permissionMode),
-			);
-		}
-
-		if (permission === "ask") {
-			const confirm = context.confirm;
-			if (!confirm) {
-				return permissionDeniedMessage(
-					name,
-					"confirmation required (non-interactive session)",
-				);
-			}
-			const approved = await confirm(formatPermissionConfirmPrompt(name, args));
-			if (!approved) {
-				return permissionDeniedMessage(name, "user denied");
-			}
-		}
-
 		try {
 			return await tool.execute(args, context);
 		} catch (err) {
@@ -168,6 +139,27 @@ export class ToolRegistry {
 				err instanceof Error ? err.message : "tool execution failed";
 			return JSON.stringify({ error: message });
 		}
+	}
+
+	async execute(
+		name: string,
+		argsJson: string,
+		context: ToolExecutionContext = {},
+	): Promise<string> {
+		const args = parseToolArguments(argsJson);
+		if (args === null) {
+			return JSON.stringify({
+				error: "invalid tool arguments JSON",
+				raw: argsJson,
+			});
+		}
+
+		const gate = await gateToolExecution(name, args, context);
+		if (!gate.allowed) {
+			return gate.result;
+		}
+
+		return this.invoke(name, argsJson, context);
 	}
 
 	async close(): Promise<void> {

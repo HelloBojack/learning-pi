@@ -2,6 +2,7 @@ import { chat } from "../llm/chat";
 import type { ChatMessage } from "../schemas/chat";
 import {
 	estimateHistoryTokens,
+	formatTrimNotice,
 	getTrimTokenBudget,
 	groupHistoryIntoUserTurns,
 	type TrimHistoryResult,
@@ -167,6 +168,15 @@ export function applySummaryToHistory(
 export function formatCompactNotice(result: CompactHistoryResult): string {
 	if (!result.summarized) return "";
 	return `[上下文] 已摘要压缩 ${result.compressedMessageCount} 条旧消息（约 ${result.tokensBefore.toLocaleString("en-US")} → ${result.tokensAfter.toLocaleString("en-US")} tokens）`;
+}
+
+export function printCompactNotices(compact: CompactHistoryResult): void {
+	if (compact.summarized) {
+		console.log(`\n${formatCompactNotice(compact)}\n`);
+	}
+	if (compact.trimmed && compact.trimmed.trimmedCount > 0) {
+		console.log(`\n${formatTrimNotice(compact.trimmed)}\n`);
+	}
 }
 
 export type CompactHistoryOptions = {

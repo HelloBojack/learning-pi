@@ -5,8 +5,11 @@ import {
 	ChatMessageSchema,
 	ChatRequestSchema,
 	ChatResponseSchema,
+	type TokenUsage,
 	type ToolCall,
 	type ToolDefinition,
+	tokenUsageFromApi,
+	ZERO_TOKEN_USAGE,
 } from "../schemas/chat";
 import { readOpenAiSseStream } from "./sse";
 import { readOpenAiSseToolsStream } from "./sse-tools";
@@ -197,7 +200,11 @@ export type ChatWithToolsResult = {
 	toolCalls: ToolCall[];
 	finishReason: string | null;
 	message: ChatMessage;
+	usage: TokenUsage;
 };
+
+export type { TokenUsage };
+export { ZERO_TOKEN_USAGE };
 
 /** 合并用户取消与超时，供 REPL / CLI 使用。 */
 export function createChatAbortControls(timeoutMs = 60_000): {
@@ -335,6 +342,7 @@ function parseChatWithToolsResponse(
 		toolCalls,
 		finishReason: choice.finish_reason ?? null,
 		message: assistantMessageFromResponse(choice.message),
+		usage: tokenUsageFromApi(data.usage) ?? ZERO_TOKEN_USAGE,
 	};
 }
 
@@ -359,6 +367,7 @@ function buildChatWithToolsResultFromStream(
 	content: string,
 	toolCalls: ToolCall[],
 	finishReason: string | null,
+	usage: TokenUsage | null,
 ): ChatWithToolsResult {
 	if (toolCalls.length === 0 && content === "") {
 		throw new LlmApiError("LLM returned empty stream", 200, "");
@@ -373,6 +382,7 @@ function buildChatWithToolsResultFromStream(
 			content: content || null,
 			tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
 		}),
+		usage: usage ?? ZERO_TOKEN_USAGE,
 	};
 }
 
@@ -429,6 +439,7 @@ export async function* chatStreamWithTools(
 			result.value.content,
 			result.value.toolCalls,
 			result.value.finishReason,
+			result.value.usage,
 		);
 	} catch (err) {
 		if (err instanceof LlmCancelledError) throw err;

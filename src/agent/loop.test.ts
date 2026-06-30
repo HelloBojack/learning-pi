@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatWithToolsResult } from "../llm/chat";
 import type { ChatMessage } from "../schemas/chat";
+import { ZERO_TOKEN_USAGE } from "../schemas/chat";
 import { AgentLoopError, runAgentLoop } from "./loop";
 import {
 	CALCULATE_TOOL,
@@ -91,13 +92,17 @@ describe("runAgentLoop", () => {
 		{ role: "user", content: "现在几点？" },
 	];
 
+	const loopTestOptions = { skipCompact: true as const };
+
 	test("returns final text when model responds without tool_calls", async () => {
 		const result = await runAgentLoop(baseHistory, {
+			...loopTestOptions,
 			chatWithTools: async () => ({
 				content: "现在是下午 3 点",
 				toolCalls: [],
 				finishReason: "stop",
 				message: { role: "assistant", content: "现在是下午 3 点" },
+				usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
 			}),
 		});
 
@@ -106,12 +111,19 @@ describe("runAgentLoop", () => {
 		expect(result.steps).toHaveLength(0);
 		expect(result.messagesAppended).toHaveLength(1);
 		expect(result.messagesAppended[0]?.role).toBe("assistant");
+		expect(result.usage).toEqual({
+			promptTokens: 10,
+			completionTokens: 5,
+			totalTokens: 15,
+		});
+		expect(result.compact).toBeNull();
 	});
 
 	test("streams final text chunks when stream option is enabled", async () => {
 		const seen: string[] = [];
 
 		const result = await runAgentLoop(baseHistory, {
+			...loopTestOptions,
 			stream: true,
 			onStreamChunk: (chunk) => {
 				seen.push(chunk);
@@ -124,6 +136,7 @@ describe("runAgentLoop", () => {
 					toolCalls: [],
 					finishReason: "stop",
 					message: { role: "assistant", content: "现在" },
+					usage: ZERO_TOKEN_USAGE,
 				};
 			},
 		});
@@ -136,6 +149,7 @@ describe("runAgentLoop", () => {
 	test("executes tool then returns final answer", async () => {
 		let call = 0;
 		const result = await runAgentLoop(baseHistory, {
+			...loopTestOptions,
 			chatWithTools: async (): Promise<ChatWithToolsResult> => {
 				call += 1;
 				if (call === 1) {
@@ -166,6 +180,7 @@ describe("runAgentLoop", () => {
 								},
 							],
 						},
+						usage: { promptTokens: 8, completionTokens: 2, totalTokens: 10 },
 					};
 				}
 
@@ -177,6 +192,7 @@ describe("runAgentLoop", () => {
 						role: "assistant",
 						content: "当前时间是 2026-06-05T12:00:00.000Z",
 					},
+					usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
 				};
 			},
 		});
@@ -185,6 +201,11 @@ describe("runAgentLoop", () => {
 		expect(result.steps).toHaveLength(1);
 		expect(result.steps[0]?.name).toBe("get_current_time");
 		expect(result.finalText).toContain("2026-06-05");
+		expect(result.usage).toEqual({
+			promptTokens: 28,
+			completionTokens: 12,
+			totalTokens: 40,
+		});
 		expect(result.messagesAppended.map((m) => m.role)).toEqual([
 			"assistant",
 			"tool",
@@ -196,11 +217,13 @@ describe("runAgentLoop", () => {
 	test("does not mutate input history", async () => {
 		const history: ChatMessage[] = [...baseHistory];
 		await runAgentLoop(history, {
+			...loopTestOptions,
 			chatWithTools: async () => ({
 				content: "ok",
 				toolCalls: [],
 				finishReason: "stop",
 				message: { role: "assistant", content: "ok" },
+				usage: ZERO_TOKEN_USAGE,
 			}),
 		});
 
@@ -210,6 +233,7 @@ describe("runAgentLoop", () => {
 	test("throws AgentLoopError when max steps exceeded", async () => {
 		await expect(
 			runAgentLoop(baseHistory, {
+				...loopTestOptions,
 				maxSteps: 2,
 				chatWithTools: async () => ({
 					content: "",
@@ -232,6 +256,7 @@ describe("runAgentLoop", () => {
 							},
 						],
 					},
+					usage: ZERO_TOKEN_USAGE,
 				}),
 			}),
 		).rejects.toBeInstanceOf(AgentLoopError);
@@ -259,10 +284,12 @@ describe("runAgentLoop", () => {
 					},
 				],
 			},
+			usage: ZERO_TOKEN_USAGE,
 		});
 
 		try {
 			await runAgentLoop(baseHistory, {
+				...loopTestOptions,
 				maxSteps: 1,
 				chatWithTools: alwaysToolCalls,
 			});
@@ -283,6 +310,7 @@ describe("runAgentLoop", () => {
 		let call = 0;
 
 		await runAgentLoop(baseHistory, {
+			...loopTestOptions,
 			chatWithTools: async (): Promise<ChatWithToolsResult> => {
 				call += 1;
 				if (call === 1) {
@@ -307,6 +335,7 @@ describe("runAgentLoop", () => {
 								},
 							],
 						},
+						usage: ZERO_TOKEN_USAGE,
 					};
 				}
 
@@ -315,6 +344,7 @@ describe("runAgentLoop", () => {
 					toolCalls: [],
 					finishReason: "stop",
 					message: { role: "assistant", content: "done" },
+					usage: ZERO_TOKEN_USAGE,
 				};
 			},
 			onToolStep: (step) => {
@@ -323,5 +353,168 @@ describe("runAgentLoop", () => {
 		});
 
 		expect(seen).toEqual(["get_current_time"]);
+	});
+
+	test("returns cancelled result when abort signal is set before next step", async () => {
+		const cancel = new AbortController();
+		cancel.abort();
+
+		const result = await runAgentLoop(baseHistory, {
+			...loopTestOptions,
+			cancelSignal: cancel.signal,
+			chatWithTools: async () => ({
+				content: "should not run",
+				toolCalls: [],
+				finishReason: "stop",
+				message: { role: "assistant", content: "should not run" },
+				usage: ZERO_TOKEN_USAGE,
+			}),
+		});
+
+		expect(result.cancelled).toBe(true);
+		expect(result.steps).toHaveLength(0);
+		expect(result.messagesAppended).toHaveLength(0);
+	});
+
+	test("returns cancelled result with partial tool messages", async () => {
+		const cancel = new AbortController();
+		let call = 0;
+
+		const result = await runAgentLoop(baseHistory, {
+			...loopTestOptions,
+			cancelSignal: cancel.signal,
+			onToolStep: () => {
+				cancel.abort();
+			},
+			chatWithTools: async (): Promise<ChatWithToolsResult> => {
+				call += 1;
+				return {
+					content: "",
+					toolCalls: [
+						{
+							id: "call_1",
+							type: "function",
+							function: { name: "get_current_time", arguments: "{}" },
+						},
+						{
+							id: "call_2",
+							type: "function",
+							function: {
+								name: "calculate",
+								arguments: '{"expression":"1+1"}',
+							},
+						},
+					],
+					finishReason: "tool_calls",
+					message: {
+						role: "assistant",
+						content: "",
+						tool_calls: [
+							{
+								id: "call_1",
+								type: "function",
+								function: { name: "get_current_time", arguments: "{}" },
+							},
+							{
+								id: "call_2",
+								type: "function",
+								function: {
+									name: "calculate",
+									arguments: '{"expression":"1+1"}',
+								},
+							},
+						],
+					},
+					usage: { promptTokens: 3, completionTokens: 1, totalTokens: 4 },
+				};
+			},
+		});
+
+		expect(call).toBe(1);
+		expect(result.cancelled).toBe(true);
+		expect(result.messagesAppended.map((m) => m.role)).toEqual([
+			"assistant",
+			"tool",
+		]);
+		expect(result.usage.promptTokens).toBe(3);
+	});
+
+	test("runs compactHistory at loop entry by default", async () => {
+		let compactCalled = false;
+		const history: ChatMessage[] = [...baseHistory];
+
+		const result = await runAgentLoop(history, {
+			compactHistory: async () => {
+				compactCalled = true;
+				return {
+					summarized: true,
+					compressedMessageCount: 1,
+					trimmed: null,
+					tokensBefore: 100,
+					tokensAfter: 50,
+				};
+			},
+			chatWithTools: async () => ({
+				content: "ok",
+				toolCalls: [],
+				finishReason: "stop",
+				message: { role: "assistant", content: "ok" },
+				usage: ZERO_TOKEN_USAGE,
+			}),
+		});
+
+		expect(compactCalled).toBe(true);
+		expect(result.compact?.summarized).toBe(true);
+	});
+
+	test("denies write_file in loop without confirm", async () => {
+		let call = 0;
+		const result = await runAgentLoop(baseHistory, {
+			...loopTestOptions,
+			toolContext: { permissionMode: "default" },
+			chatWithTools: async () => {
+				call += 1;
+				if (call > 1) {
+					return {
+						content: "done",
+						toolCalls: [],
+						finishReason: "stop",
+						message: { role: "assistant", content: "done" },
+						usage: ZERO_TOKEN_USAGE,
+					};
+				}
+				return {
+					content: "",
+					toolCalls: [
+						{
+							id: "call_w",
+							type: "function",
+							function: {
+								name: "write_file",
+								arguments: '{"path":"x.txt","content":"hi"}',
+							},
+						},
+					],
+					finishReason: "tool_calls",
+					message: {
+						role: "assistant",
+						content: "",
+						tool_calls: [
+							{
+								id: "call_w",
+								type: "function",
+								function: {
+									name: "write_file",
+									arguments: '{"path":"x.txt","content":"hi"}',
+								},
+							},
+						],
+					},
+					usage: ZERO_TOKEN_USAGE,
+				};
+			},
+		});
+
+		expect(result.steps[0]?.result).toContain("permission denied");
 	});
 });

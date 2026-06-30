@@ -1,6 +1,13 @@
 import { runOnce, runRepl } from "./repl";
 
-export { formatToolStepLog, printAgentToolSteps } from "./agent/display";
+export type { AgentOptions } from "./agent/agent";
+export { Agent } from "./agent/agent";
+export {
+	formatTokenUsageLine,
+	formatToolStepLog,
+	printAgentToolSteps,
+	printChatDivider,
+} from "./agent/display";
 export type {
 	AgentLoopOptions,
 	AgentLoopPartialResult,

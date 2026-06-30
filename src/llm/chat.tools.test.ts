@@ -73,6 +73,39 @@ describe("chatWithTools", () => {
 		expect(result.message.content).toBe("hello");
 	});
 
+	test("parses usage from JSON response", async () => {
+		mockFetch(
+			async () =>
+				new Response(
+					JSON.stringify({
+						choices: [
+							{
+								message: { role: "assistant", content: "hello" },
+								finish_reason: "stop",
+							},
+						],
+						usage: {
+							prompt_tokens: 12,
+							completion_tokens: 7,
+							total_tokens: 19,
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
+		);
+
+		const result = await chatWithTools(
+			[{ role: "user", content: "hi" }],
+			instantRetry,
+		);
+
+		expect(result.usage).toEqual({
+			promptTokens: 12,
+			completionTokens: 7,
+			totalTokens: 19,
+		});
+	});
+
 	test("parses tool_calls response", async () => {
 		mockFetch(
 			async () =>

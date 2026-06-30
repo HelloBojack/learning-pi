@@ -1,9 +1,15 @@
-import { StreamChunkSchema, type ToolCall } from "../schemas/chat";
+import {
+	StreamChunkSchema,
+	type TokenUsage,
+	type ToolCall,
+	tokenUsageFromApi,
+} from "../schemas/chat";
 
 export type SseToolsStreamResult = {
 	content: string;
 	toolCalls: ToolCall[];
 	finishReason: string | null;
+	usage: TokenUsage | null;
 };
 
 type ToolCallAccumulator = {
@@ -25,6 +31,7 @@ export async function* readOpenAiSseToolsStream(
 	let buffer = "";
 	let content = "";
 	let finishReason: string | null = null;
+	let usage: TokenUsage | null = null;
 	const toolCallsByIndex = new Map<number, ToolCallAccumulator>();
 
 	try {
@@ -50,6 +57,9 @@ export async function* readOpenAiSseToolsStream(
 					(reason) => {
 						finishReason = reason;
 					},
+					(nextUsage) => {
+						usage = nextUsage;
+					},
 				);
 				if (piece) {
 					content += piece;
@@ -67,9 +77,16 @@ export async function* readOpenAiSseToolsStream(
 
 		const tail = buffer.trim();
 		if (tail) {
-			const piece = parseSseToolsDataLine(tail, toolCallsByIndex, (reason) => {
-				finishReason = reason;
-			});
+			const piece = parseSseToolsDataLine(
+				tail,
+				toolCallsByIndex,
+				(reason) => {
+					finishReason = reason;
+				},
+				(nextUsage) => {
+					usage = nextUsage;
+				},
+			);
 			if (piece) {
 				content += piece;
 				yield piece;
@@ -83,6 +100,7 @@ export async function* readOpenAiSseToolsStream(
 		content,
 		toolCalls: finalizeToolCalls(toolCallsByIndex),
 		finishReason,
+		usage,
 	};
 }
 
@@ -90,6 +108,7 @@ function parseSseToolsDataLine(
 	line: string,
 	toolCallsByIndex: Map<number, ToolCallAccumulator>,
 	onFinishReason: (reason: string | null) => void,
+	onUsage: (usage: TokenUsage | null) => void,
 ): string | null {
 	if (!line.startsWith("data:")) return null;
 
@@ -108,6 +127,11 @@ function parseSseToolsDataLine(
 
 	if (parsed.data.error) {
 		throw new Error(parsed.data.error.message);
+	}
+
+	const parsedUsage = tokenUsageFromApi(parsed.data.usage);
+	if (parsedUsage) {
+		onUsage(parsedUsage);
 	}
 
 	const choice = parsed.data.choices?.[0];

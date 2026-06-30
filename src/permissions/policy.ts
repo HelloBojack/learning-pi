@@ -117,3 +117,55 @@ export function permissionDeniedMessage(
 ): string {
 	return JSON.stringify({ error: "permission denied", tool: toolName, reason });
 }
+
+export type ToolPermissionContext = {
+	permissionMode?: PermissionMode;
+	confirm?: (message: string) => Promise<boolean>;
+	confirmedPaths?: Set<string>;
+};
+
+/** 权限闸门：deny/ask/allow；供 Agent loop 与 ToolRegistry 共用。 */
+export async function gateToolExecution(
+	toolName: string,
+	args: unknown,
+	context: ToolPermissionContext = {},
+): Promise<{ allowed: true } | { allowed: false; result: string }> {
+	const permissionMode = context.permissionMode ?? getPermissionModeFromEnv();
+	const permission = evaluatePermission(toolName, args, permissionMode);
+
+	if (permission === "deny") {
+		return {
+			allowed: false,
+			result: permissionDeniedMessage(
+				toolName,
+				permissionDeniedReason(toolName, permissionMode),
+			),
+		};
+	}
+
+	if (permission === "ask") {
+		const prompt = formatPermissionConfirmPrompt(toolName, args);
+		if (!context.confirmedPaths?.has(prompt)) {
+			const confirm = context.confirm;
+			if (!confirm) {
+				return {
+					allowed: false,
+					result: permissionDeniedMessage(
+						toolName,
+						"confirmation required (non-interactive session)",
+					),
+				};
+			}
+			const approved = await confirm(prompt);
+			if (!approved) {
+				return {
+					allowed: false,
+					result: permissionDeniedMessage(toolName, "user denied"),
+				};
+			}
+			context.confirmedPaths?.add(prompt);
+		}
+	}
+
+	return { allowed: true };
+}

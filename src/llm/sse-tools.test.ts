@@ -57,4 +57,19 @@ describe("readOpenAiSseToolsStream", () => {
 		]);
 		expect(result.finishReason).toBe("tool_calls");
 	});
+
+	test("captures usage from final SSE chunk", async () => {
+		const body = encodeSse([
+			'data: {"choices":[{"delta":{"content":"hi"}}]}',
+			'data: {"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}',
+			"data: [DONE]",
+		]);
+
+		const { result } = await collectToolsStream(body);
+		expect(result.usage).toEqual({
+			promptTokens: 5,
+			completionTokens: 2,
+			totalTokens: 7,
+		});
+	});
 });

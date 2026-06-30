@@ -57,9 +57,55 @@ const ChatChoiceSchema = z.object({
 	finish_reason: z.string().nullable().optional(),
 });
 
+/** OpenAI 兼容 usage 字段（部分网关会在流式最后一帧返回）。 */
+export const ChatUsageSchema = z.object({
+	prompt_tokens: z.number().nonnegative().optional(),
+	completion_tokens: z.number().nonnegative().optional(),
+	total_tokens: z.number().nonnegative().optional(),
+});
+export type ChatUsage = z.infer<typeof ChatUsageSchema>;
+
+export type TokenUsage = {
+	promptTokens: number;
+	completionTokens: number;
+	totalTokens: number;
+};
+
+export const ZERO_TOKEN_USAGE: TokenUsage = {
+	promptTokens: 0,
+	completionTokens: 0,
+	totalTokens: 0,
+};
+
+export function tokenUsageFromApi(
+	usage: ChatUsage | null | undefined,
+): TokenUsage | null {
+	if (!usage) return null;
+	const promptTokens = usage.prompt_tokens ?? 0;
+	const completionTokens = usage.completion_tokens ?? 0;
+	const totalTokens = usage.total_tokens ?? promptTokens + completionTokens;
+	if (promptTokens === 0 && completionTokens === 0 && totalTokens === 0) {
+		return null;
+	}
+	return { promptTokens, completionTokens, totalTokens };
+}
+
+export function addTokenUsage(
+	accumulated: TokenUsage,
+	increment: TokenUsage | null | undefined,
+): TokenUsage {
+	if (!increment) return accumulated;
+	return {
+		promptTokens: accumulated.promptTokens + increment.promptTokens,
+		completionTokens: accumulated.completionTokens + increment.completionTokens,
+		totalTokens: accumulated.totalTokens + increment.totalTokens,
+	};
+}
+
 export const ChatResponseSchema = z.object({
 	id: z.string().optional(),
 	choices: z.array(ChatChoiceSchema).min(1),
+	usage: ChatUsageSchema.optional(),
 	error: z
 		.object({
 			message: z.string(),
@@ -97,6 +143,7 @@ export const StreamChunkSchema = z.object({
 			}),
 		)
 		.optional(),
+	usage: ChatUsageSchema.optional(),
 	error: z
 		.object({
 			message: z.string(),
