@@ -1,11 +1,15 @@
 import { loadEnv, resolveChatEndpoint } from "../env";
 import {
+	assistantMessageFromResponse,
 	type ChatMessage,
 	ChatMessageSchema,
 	ChatRequestSchema,
 	ChatResponseSchema,
+	type ToolCall,
+	type ToolDefinition,
 } from "../schemas/chat";
 import { readOpenAiSseStream } from "./sse";
+import { readOpenAiSseToolsStream } from "./sse-tools";
 import { writeChunkToStdout } from "./stdout";
 
 export class LlmApiError extends Error {
@@ -184,6 +188,17 @@ export type ChatOptions = {
 	retryBackoff?: (attempt: number) => Promise<void>;
 };
 
+export type ChatWithToolsOptions = ChatOptions & {
+	tools?: ToolDefinition[];
+};
+
+export type ChatWithToolsResult = {
+	content: string;
+	toolCalls: ToolCall[];
+	finishReason: string | null;
+	message: ChatMessage;
+};
+
 /** 合并用户取消与超时，供 REPL / CLI 使用。 */
 export function createChatAbortControls(timeoutMs = 60_000): {
 	cancel: AbortController;
@@ -199,7 +214,7 @@ export function createChatAbortControls(timeoutMs = 60_000): {
 
 async function postChat(
 	messages: ChatMessage[],
-	options: ChatOptions,
+	options: ChatWithToolsOptions,
 	stream: boolean,
 ): Promise<Response> {
 	const env = loadEnv();
@@ -211,6 +226,7 @@ async function postChat(
 		messages: messages.map((m) => ChatMessageSchema.parse(m)),
 		temperature: options.temperature,
 		stream,
+		tools: options.tools,
 	});
 
 	const headers: Record<string, string> = {
@@ -275,6 +291,152 @@ async function parseJsonChatResponse(
 	}
 
 	return content;
+}
+
+function parseChatWithToolsResponse(
+	response: Response,
+	raw: string,
+): ChatWithToolsResult {
+	let json: unknown;
+	try {
+		json = JSON.parse(raw);
+	} catch {
+		throw new LlmApiError("LLM returned non-JSON body", response.status, raw);
+	}
+
+	const parsed = ChatResponseSchema.safeParse(json);
+	if (!parsed.success) {
+		throw new LlmApiError(
+			`Invalid LLM response shape: ${parsed.error.message}`,
+			response.status,
+			raw,
+		);
+	}
+
+	const data = parsed.data;
+	if (data.error) {
+		throw new LlmApiError(data.error.message, response.status, raw);
+	}
+
+	const choice = data.choices[0];
+	if (!choice) {
+		throw new LlmApiError("LLM returned no choices", response.status, raw);
+	}
+
+	const toolCalls = choice.message.tool_calls ?? [];
+	const content = choice.message.content ?? "";
+
+	if (toolCalls.length === 0 && content === "") {
+		throw new LlmApiError("LLM returned empty content", response.status, raw);
+	}
+
+	return {
+		content,
+		toolCalls,
+		finishReason: choice.finish_reason ?? null,
+		message: assistantMessageFromResponse(choice.message),
+	};
+}
+
+/**
+ * 非流式调用，返回文本或 tool_calls（OpenAI 兼容 tools API）。
+ */
+export async function chatWithTools(
+	messages: ChatMessage[],
+	options: ChatWithToolsOptions = {},
+): Promise<ChatWithToolsResult> {
+	const response = await postChat(messages, options, false);
+
+	if (!response.ok) {
+		await throwForFailedResponse(response);
+	}
+
+	const raw = await response.text();
+	return parseChatWithToolsResponse(response, raw);
+}
+
+function buildChatWithToolsResultFromStream(
+	content: string,
+	toolCalls: ToolCall[],
+	finishReason: string | null,
+): ChatWithToolsResult {
+	if (toolCalls.length === 0 && content === "") {
+		throw new LlmApiError("LLM returned empty stream", 200, "");
+	}
+
+	return {
+		content,
+		toolCalls,
+		finishReason,
+		message: assistantMessageFromResponse({
+			role: "assistant",
+			content: content || null,
+			tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+		}),
+	};
+}
+
+/**
+ * 流式调用，逐段 yield 文本增量；结束时 return 完整 content 与 tool_calls。
+ */
+export async function* chatStreamWithTools(
+	messages: ChatMessage[],
+	options: ChatWithToolsOptions = {},
+): AsyncGenerator<string, ChatWithToolsResult> {
+	let full = "";
+
+	try {
+		const response = await postChat(messages, options, true);
+
+		if (!response.ok) {
+			await throwForFailedResponse(response);
+		}
+
+		const contentType = response.headers.get("content-type") ?? "";
+
+		if (contentType.includes("application/json")) {
+			const raw = await response.text();
+			throwIfUserCancelled(options, full);
+			const parsed = parseChatWithToolsResponse(response, raw);
+			for (const char of parsed.content) {
+				throwIfUserCancelled(options, full);
+				full += char;
+				yield char;
+			}
+			return parsed;
+		}
+
+		if (!response.body) {
+			throw new LlmApiError(
+				"LLM returned no response body",
+				response.status,
+				"",
+			);
+		}
+
+		const stream = readOpenAiSseToolsStream(response.body, {
+			signal: options.signal,
+		});
+		let result = await stream.next();
+		while (!result.done) {
+			throwIfUserCancelled(options, full);
+			full += result.value;
+			yield result.value;
+			result = await stream.next();
+		}
+
+		return buildChatWithToolsResultFromStream(
+			result.value.content,
+			result.value.toolCalls,
+			result.value.finishReason,
+		);
+	} catch (err) {
+		if (err instanceof LlmCancelledError) throw err;
+		if (options.cancelSignal?.aborted) {
+			throw new LlmCancelledError(full, { cause: err });
+		}
+		rethrowStreamError(err, options, full);
+	}
 }
 
 /**

@@ -40,6 +40,36 @@ describe("summary compression", () => {
 		expect(content).toContain(SUMMARY_SECTION_END);
 	});
 
+	test("splitHistoryForCompression keeps agent turn intact", () => {
+		const history: ChatMessage[] = [
+			{ role: "system", content: "sys" },
+			{ role: "user", content: "old" },
+			{
+				role: "assistant",
+				content: "",
+				tool_calls: [
+					{
+						id: "call_1",
+						type: "function",
+						function: { name: "calculate", arguments: '{"expression":"1+1"}' },
+					},
+				],
+			},
+			{ role: "tool", content: '{"result":2}', tool_call_id: "call_1" },
+			{ role: "assistant", content: "2" },
+			{ role: "user", content: "new" },
+		];
+
+		const split = splitHistoryForCompression(history, 1);
+		expect(split.toCompress.map((m) => m.role)).toEqual([
+			"user",
+			"assistant",
+			"tool",
+			"assistant",
+		]);
+		expect(split.toKeep.map((m) => m.content)).toEqual(["new"]);
+	});
+
 	test("splitHistoryForCompression keeps recent turns", () => {
 		const history: ChatMessage[] = [
 			{ role: "system", content: "sys" },

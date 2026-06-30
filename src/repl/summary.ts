@@ -3,6 +3,7 @@ import type { ChatMessage } from "../schemas/chat";
 import {
 	estimateHistoryTokens,
 	getTrimTokenBudget,
+	groupHistoryIntoUserTurns,
 	type TrimHistoryResult,
 	trimHistoryToTokenLimit,
 } from "./context";
@@ -80,27 +81,9 @@ export function splitHistoryForCompression(
 	priorSummary: string | null;
 } {
 	const systemMessages = history.filter((m) => m.role === "system");
-	const turns = history.filter((m) => m.role !== "system");
-
-	const groupedTurns: ChatMessage[][] = [];
-	for (let i = 0; i < turns.length; ) {
-		const msg = turns[i];
-		if (!msg) break;
-
-		if (msg.role === "user") {
-			const turn: ChatMessage[] = [msg];
-			i += 1;
-			if (turns[i]?.role === "assistant") {
-				turn.push(turns[i] as ChatMessage);
-				i += 1;
-			}
-			groupedTurns.push(turn);
-			continue;
-		}
-
-		groupedTurns.push([msg]);
-		i += 1;
-	}
+	const groupedTurns = groupHistoryIntoUserTurns(
+		history.filter((m) => m.role !== "system"),
+	);
 
 	const keepCount = Math.max(1, keepRecentTurns);
 	const keepTurns = groupedTurns.slice(-keepCount);

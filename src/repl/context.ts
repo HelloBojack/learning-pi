@@ -81,13 +81,39 @@ export type TrimHistoryResult = {
 	tokensAfter: number;
 };
 
-function countNonSystemMessages(messages: ChatMessage[]): number {
-	return messages.filter((m) => m.role !== "system").length;
+/**
+ * 以 user 消息为锚将非 system 消息分组为一轮对话。
+ * 一轮可包含 agent 轨迹：user → assistant(tool_calls) → tool* → assistant。
+ */
+export function groupHistoryIntoUserTurns(
+	messages: ChatMessage[],
+): ChatMessage[][] {
+	const turns: ChatMessage[][] = [];
+	let current: ChatMessage[] = [];
+
+	for (const msg of messages) {
+		if (msg.role === "user") {
+			if (current.length > 0) turns.push(current);
+			current = [msg];
+			continue;
+		}
+		current.push(msg);
+	}
+
+	if (current.length > 0) turns.push(current);
+	return turns;
+}
+
+function rebuildHistory(
+	systemMessages: ChatMessage[],
+	turns: ChatMessage[][],
+): ChatMessage[] {
+	return [...systemMessages, ...turns.flat()];
 }
 
 /**
- * 滑动窗口裁剪：保留 system，从最早轮次起删除 user/assistant，直到估算 token 低于预算。
- * 至少保留 1 条非 system 消息（通常是当前 user 输入）。原地修改 history。
+ * 滑动窗口裁剪：保留 system，从最早一轮起整轮删除，直到估算 token 低于预算。
+ * 至少保留 1 轮（通常是当前 user 输入）。原地修改 history。
  */
 export function trimHistoryToTokenLimit(
 	history: ChatMessage[],
@@ -100,28 +126,24 @@ export function trimHistoryToTokenLimit(
 		return { trimmedCount: 0, tokensBefore, tokensAfter: tokensBefore };
 	}
 
+	const systemMessages = history.filter((m) => m.role === "system");
+	const turns = groupHistoryIntoUserTurns(
+		history.filter((m) => m.role !== "system"),
+	);
+
 	let trimmedCount = 0;
 
-	while (estimateHistoryTokens(history) > cap) {
-		if (countNonSystemMessages(history) <= 1) break;
-
-		const firstTurnIdx = history.findIndex((m) => m.role !== "system");
-		if (firstTurnIdx === -1) break;
-
-		const removed = history[firstTurnIdx];
-		if (!removed) break;
-
-		history.splice(firstTurnIdx, 1);
-		trimmedCount += 1;
-
-		if (
-			removed.role === "user" &&
-			history[firstTurnIdx]?.role === "assistant"
-		) {
-			history.splice(firstTurnIdx, 1);
-			trimmedCount += 1;
-		}
+	while (
+		turns.length > 1 &&
+		estimateHistoryTokens(rebuildHistory(systemMessages, turns)) > cap
+	) {
+		const removed = turns.shift();
+		trimmedCount += removed?.length ?? 0;
 	}
+
+	const next = rebuildHistory(systemMessages, turns);
+	history.length = 0;
+	history.push(...next);
 
 	return {
 		trimmedCount,

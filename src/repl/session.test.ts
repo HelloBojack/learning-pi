@@ -30,10 +30,15 @@ describe("session persistence", () => {
 		setActivePresetId("default");
 	});
 
-	test("countConversationTurns excludes system messages", () => {
+	test("countConversationTurns excludes system and tool messages", () => {
 		const history = [
 			...createInitialHistory(),
 			{ role: "user" as const, content: "a" },
+			{
+				role: "tool" as const,
+				content: "{}",
+				tool_call_id: "call_1",
+			},
 			{ role: "assistant" as const, content: "b" },
 		];
 		expect(countConversationTurns(history)).toBe(2);

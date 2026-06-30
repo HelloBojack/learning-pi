@@ -12,6 +12,7 @@ const ROLE_LABEL: Record<ChatRole, string> = {
 	system: "system",
 	user: "you",
 	assistant: "assistant",
+	tool: "tool",
 };
 
 function formatContent(content: string, maxLen: number): string {

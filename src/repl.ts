@@ -1,10 +1,12 @@
+import { formatToolStepLog } from "./agent/display";
+import { AgentLoopError, runAgentLoop } from "./agent/loop";
 import {
-	chatStreamToStdout,
 	createChatAbortControls,
 	LlmApiError,
 	LlmCancelledError,
 	LlmNetworkError,
 } from "./llm/chat";
+import { writeChunkToStdout } from "./llm/stdout";
 import { withSystemPrompt } from "./prompts";
 import { tryHandleLocalCommand } from "./repl/commands";
 import { formatTrimNotice } from "./repl/context";
@@ -34,13 +36,13 @@ export async function runRepl(): Promise<void> {
 		}
 	}
 
-	console.log("learning-pi 对话已启动（流式输出）");
+	console.log("learning-pi 对话已启动（流式输出，支持工具调用）");
 	if (restored) {
 		console.log(`已恢复上次对话（${restoredTurnCount} 条消息）`);
 	}
 	console.log(
 		"输入 / 呼出命令菜单（↑↓ 选择），/help 查看全部，/quit 退出\n" +
-			"输出过程中 Ctrl+C 中断当前回复，输入时 Ctrl+C 退出\n",
+			"输出过程中 Ctrl+C 中断当前回复；可调用工具（如 calculate、get_current_time）\n",
 	);
 
 	try {
@@ -78,13 +80,27 @@ export async function runRepl(): Promise<void> {
 			const stopInterruptWatch = rl.onStreamInterrupt(() => cancel.abort());
 
 			try {
-				const reply = await chatStreamToStdout(
-					history,
-					{ signal, cancelSignal: cancel.signal },
-					{ prefix: "assistant> " },
-				);
+				let prefixWritten = false;
+				const result = await runAgentLoop(history, {
+					signal,
+					cancelSignal: cancel.signal,
+					stream: true,
+					onStreamChunk: async (chunk) => {
+						if (!prefixWritten) {
+							process.stdout.write("assistant> ");
+							prefixWritten = true;
+						}
+						await writeChunkToStdout(chunk);
+					},
+					onToolStep: (step) => {
+						console.log(`\n${formatToolStepLog(step)}\n`);
+					},
+				});
+				if (!result.streamed) {
+					console.log(`assistant> ${result.finalText}`);
+				}
 				console.log("\n");
-				history.push({ role: "assistant", content: reply });
+				history.push(...result.messagesAppended);
 			} catch (err) {
 				if (err instanceof LlmCancelledError) {
 					console.log("\n[已中断]");
@@ -98,17 +114,24 @@ export async function runRepl(): Promise<void> {
 					continue;
 				}
 
-				history.pop();
-				if (err instanceof LlmNetworkError) {
-					console.error(`\n[网络错误] ${err.message}`);
-				} else if (err instanceof LlmApiError) {
-					const tag = err.isClientError() ? "客户端错误" : "服务端错误";
-					console.error(`\n[${tag} ${err.status}] ${err.message}`);
-					if (err.body) console.error(err.body);
-				} else if (err instanceof Error) {
-					console.error(`\n[错误] ${err.message}`);
+				if (err instanceof AgentLoopError) {
+					if (err.partial?.messagesAppended.length) {
+						history.push(...err.partial.messagesAppended);
+					}
+					console.error(`\n[Agent] ${err.message}`);
 				} else {
-					console.error("\n[错误] 未知错误");
+					history.pop();
+					if (err instanceof LlmNetworkError) {
+						console.error(`\n[网络错误] ${err.message}`);
+					} else if (err instanceof LlmApiError) {
+						const tag = err.isClientError() ? "客户端错误" : "服务端错误";
+						console.error(`\n[${tag} ${err.status}] ${err.message}`);
+						if (err.body) console.error(err.body);
+					} else if (err instanceof Error) {
+						console.error(`\n[错误] ${err.message}`);
+					} else {
+						console.error("\n[错误] 未知错误");
+					}
 				}
 				console.log();
 			} finally {
@@ -122,8 +145,16 @@ export async function runRepl(): Promise<void> {
 }
 
 export async function runOnce(prompt: string): Promise<void> {
-	await chatStreamToStdout(
-		withSystemPrompt([{ role: "user", content: prompt }]),
-	);
+	const history = withSystemPrompt([{ role: "user", content: prompt }]);
+	const result = await runAgentLoop(history, {
+		stream: true,
+		onStreamChunk: writeChunkToStdout,
+		onToolStep: (step) => {
+			console.log(formatToolStepLog(step));
+		},
+	});
+	if (!result.streamed) {
+		console.log(result.finalText);
+	}
 	console.log();
 }

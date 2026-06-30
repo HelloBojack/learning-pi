@@ -120,4 +120,35 @@ describe("trimHistoryToTokenLimit", () => {
 		process.env.CONTEXT_TOKEN_LIMIT = "5000";
 		expect(getTrimTokenBudget()).toBe(5000 - 1024);
 	});
+
+	test("removes oldest user turn atomically including agent tool messages", () => {
+		const history: ChatMessage[] = [
+			{ role: "system", content: "s" },
+			{ role: "user", content: "a".repeat(120) },
+			{
+				role: "assistant",
+				content: "",
+				tool_calls: [
+					{
+						id: "call_1",
+						type: "function",
+						function: { name: "get_current_time", arguments: "{}" },
+					},
+				],
+			},
+			{
+				role: "tool",
+				content: '{"iso":"2026-01-01T00:00:00+08:00"}',
+				tool_call_id: "call_1",
+			},
+			{ role: "assistant", content: "b".repeat(120) },
+			{ role: "user", content: "latest" },
+		];
+
+		const result = trimHistoryToTokenLimit(history, 80);
+		expect(result.trimmedCount).toBe(4);
+		expect(history.map((m) => m.role)).toEqual(["system", "user"]);
+		expect(history[1]?.content).toBe("latest");
+		expect(estimateHistoryTokens(history)).toBeLessThanOrEqual(80);
+	});
 });

@@ -62,7 +62,8 @@ export async function loadLatestSession(): Promise<ChatMessage[] | null> {
 }
 
 export function countConversationTurns(history: ChatMessage[]): number {
-	return history.filter((m) => m.role !== "system").length;
+	return history.filter((m) => m.role === "user" || m.role === "assistant")
+		.length;
 }
 
 /** 退出时将 history 写入 sessions/latest.json。 */
