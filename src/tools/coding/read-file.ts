@@ -24,6 +24,7 @@ export type ReadFileResult = {
 	totalLines: number;
 	truncated: boolean;
 	bytesRead: number;
+	mtime_ms: number;
 };
 
 function parsePositiveInt(value: unknown, field: string): number | null {
@@ -114,6 +115,7 @@ export async function executeReadFile(args: ReadFileArgs): Promise<string> {
 				totalLines: selected.totalLines,
 				truncated: true,
 				bytesRead: MAX_READ_FILE_BYTES,
+				mtime_ms: Math.floor(info.mtimeMs),
 			};
 			return JSON.stringify(result);
 		}
@@ -129,6 +131,7 @@ export async function executeReadFile(args: ReadFileArgs): Promise<string> {
 			totalLines: selected.totalLines,
 			truncated: false,
 			bytesRead: Buffer.byteLength(raw, "utf-8"),
+			mtime_ms: Math.floor(info.mtimeMs),
 		};
 		return JSON.stringify(result);
 	} catch (err) {

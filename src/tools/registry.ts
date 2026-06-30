@@ -2,8 +2,10 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createMcpRegisteredTool } from "../mcp/adapter";
 import {
 	evaluatePermission,
+	formatPermissionConfirmPrompt,
 	getPermissionModeFromEnv,
 	permissionDeniedMessage,
+	permissionDeniedReason,
 } from "../permissions/policy";
 import type { ToolDefinition } from "../schemas/chat";
 import type {
@@ -139,13 +141,10 @@ export class ToolRegistry {
 		const permission = evaluatePermission(name, args, permissionMode);
 
 		if (permission === "deny") {
-			const reason =
-				name === "run_terminal_cmd"
-					? permissionMode === "dont-ask"
-						? "shell commands disabled in dont-ask mode"
-						: "command blocked by safety policy"
-					: "not allowed";
-			return permissionDeniedMessage(name, reason);
+			return permissionDeniedMessage(
+				name,
+				permissionDeniedReason(name, permissionMode),
+			);
 		}
 
 		if (permission === "ask") {
@@ -156,16 +155,7 @@ export class ToolRegistry {
 					"confirmation required (non-interactive session)",
 				);
 			}
-			const command =
-				typeof args === "object" &&
-				args !== null &&
-				"command" in args &&
-				typeof (args as { command: unknown }).command === "string"
-					? (args as { command: string }).command.trim()
-					: "";
-			const approved = await confirm(
-				`Allow run_terminal_cmd?\n  $ ${command}\n[y/N] `,
-			);
+			const approved = await confirm(formatPermissionConfirmPrompt(name, args));
 			if (!approved) {
 				return permissionDeniedMessage(name, "user denied");
 			}

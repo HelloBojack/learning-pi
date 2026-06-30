@@ -6,9 +6,11 @@ describe("coding tool hints", () => {
 		const hint = buildCodingToolHint([
 			"calculate",
 			"read_file",
+			"edit_file",
 			"run_terminal_cmd",
 		]);
 		expect(hint).toContain("read_file");
+		expect(hint).toContain("edit_file");
 		expect(hint).toContain("run_terminal_cmd");
 		expect(hint).not.toContain("calculate");
 	});

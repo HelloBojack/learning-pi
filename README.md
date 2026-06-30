@@ -29,4 +29,24 @@ bun test                 # 单元测试
 bun run test:watch
 ```
 
+## Coding Tools
+
+本项目可用的编码工具：
+
+- `read_file`：读取工作区内的文本文件
+- `grep`：在工作区内搜索文件内容
+- `list_dir`：列出目录下的文件和子目录
+- `write_file`：创建或覆盖文件
+- `edit_file`：对文件进行精确替换编辑
+- `run_terminal_cmd`：在工作区内执行终端命令
+
+### Permission Mode
+
+`PERMISSION_MODE` 用于控制某些写入/执行类操作是否需要额外确认：
+
+- `accept-edits`：允许编辑类操作直接执行
+- `yolo`：允许写入/执行类操作尽量直接执行
+
+未设置时，默认需要交互确认。
+
 This project uses [Bun](https://bun.com) v1.3.14.

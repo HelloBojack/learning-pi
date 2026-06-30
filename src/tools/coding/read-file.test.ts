@@ -36,10 +36,12 @@ describe("read_file tool", () => {
 			path: string;
 			content: string;
 			totalLines: number;
+			mtime_ms: number;
 		};
 		expect(parsed.path).toBe("sample.txt");
 		expect(parsed.content).toBe("line1\nline2\nline3");
 		expect(parsed.totalLines).toBe(3);
+		expect(typeof parsed.mtime_ms).toBe("number");
 	});
 
 	test("supports offset and limit", async () => {

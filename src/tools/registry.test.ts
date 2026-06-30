@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { mcpResultToString, mcpToolToDefinition } from "../mcp/adapter";
 import { createLocalToolRegistry } from "../tools/local";
 import { ToolRegistry } from "../tools/registry";
@@ -14,6 +17,9 @@ describe("ToolRegistry", () => {
 			"fetch_url",
 			"read_file",
 			"grep",
+			"list_dir",
+			"write_file",
+			"edit_file",
 			"run_terminal_cmd",
 		]);
 	});
@@ -22,6 +28,42 @@ describe("ToolRegistry", () => {
 		const registry = createLocalToolRegistry();
 		const result = await registry.execute("calculate", '{"expression":"1+2"}');
 		expect(JSON.parse(result)).toEqual({ expression: "1+2", result: 3 });
+	});
+
+	test("denies write_file without confirm in default mode", async () => {
+		const registry = createLocalToolRegistry();
+		const result = await registry.execute(
+			"write_file",
+			'{"path":"x.txt","content":"hi"}',
+			{ permissionMode: "default" },
+		);
+		const parsed = JSON.parse(result) as { error: string; reason: string };
+		expect(parsed.error).toBe("permission denied");
+		expect(parsed.reason).toContain("non-interactive");
+	});
+
+	test("allows write_file in accept-edits mode", async () => {
+		const workspace = await mkdtemp(join(tmpdir(), "learning-pi-perm-"));
+		const previousRoot = process.env.WORKSPACE_ROOT;
+		process.env.WORKSPACE_ROOT = workspace;
+		try {
+			const registry = createLocalToolRegistry();
+			const result = await registry.execute(
+				"write_file",
+				'{"path":"perm-test.txt","content":"ok"}',
+				{ permissionMode: "accept-edits" },
+			);
+			const parsed = JSON.parse(result) as { path?: string; error?: string };
+			expect(parsed.error).toBeUndefined();
+			expect(parsed.path).toBe("perm-test.txt");
+		} finally {
+			if (previousRoot === undefined) {
+				delete process.env.WORKSPACE_ROOT;
+			} else {
+				process.env.WORKSPACE_ROOT = previousRoot;
+			}
+			await rm(workspace, { recursive: true, force: true });
+		}
 	});
 
 	test("denies run_terminal_cmd without confirm in default mode", async () => {

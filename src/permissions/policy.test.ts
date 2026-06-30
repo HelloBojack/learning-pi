@@ -9,6 +9,53 @@ describe("evaluatePermission", () => {
 		expect(evaluatePermission("grep", { pattern: "foo" }, "dont-ask")).toBe(
 			"allow",
 		);
+		expect(evaluatePermission("list_dir", { path: "." }, "dont-ask")).toBe(
+			"allow",
+		);
+	});
+
+	test("asks for write tools in default mode", () => {
+		expect(
+			evaluatePermission(
+				"write_file",
+				{ path: "a.ts", content: "x" },
+				"default",
+			),
+		).toBe("ask");
+		expect(
+			evaluatePermission(
+				"edit_file",
+				{ path: "a.ts", old_string: "a", new_string: "b" },
+				"default",
+			),
+		).toBe("ask");
+	});
+
+	test("allows write tools in accept-edits mode", () => {
+		expect(
+			evaluatePermission(
+				"write_file",
+				{ path: "a.ts", content: "x" },
+				"accept-edits",
+			),
+		).toBe("allow");
+		expect(
+			evaluatePermission(
+				"run_terminal_cmd",
+				{ command: "echo hi" },
+				"accept-edits",
+			),
+		).toBe("ask");
+	});
+
+	test("denies write tools in dont-ask mode", () => {
+		expect(
+			evaluatePermission(
+				"edit_file",
+				{ path: "a.ts", old_string: "a", new_string: "b" },
+				"dont-ask",
+			),
+		).toBe("deny");
 	});
 
 	test("asks for shell in default mode", () => {
